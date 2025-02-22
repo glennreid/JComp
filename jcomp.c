@@ -71,6 +71,7 @@ short is_reserved ( char *word )
 		"window", "document", "self", "this",
 		"typeof", "undefined", "null", "NULL",
 		"script", "<script", "</script", "/script", "type", "src", "ref",
+		"<?php", "empty", "foreach", "echo", "include",
 		NULL
 	};
 	if ( strstr(word, "<script") || strstr(word, "/script") ) {
@@ -421,7 +422,7 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 	char token[1024];
 	int func_idx=0, ident_idx=0;
 	int idx=0, cdx=0;
-	short in_js=0, in_com=0, ctype=0, in_str=0, stype=0, ftoke=0, slash=0, saw_dot=0;
+	short in_js=0, in_php=0, in_com=0, ctype=0, in_str=0, stype=0, ftoke=0, slash=0, saw_dot=0;
 	//short idb=0, cdb=0;		// debug flags
 
 	token[0] = '\0';
@@ -435,6 +436,15 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 			case '\r': case '\n': 										count_lines++; cdx = 0; break;
 			case '{': case '}': case '(': case ')': case '[': case ']':	ftoke = 0; break;
 			case ';': case ':':											ftoke = 0; break;
+		}
+		if ( !in_php ) {
+			if ( !strncmp(token, "<?php", 5) ) {
+				in_php = 1;
+			}
+		} else {
+			if ( !strncmp(token, "?>", 2) ) {
+				in_php = 0;
+			}
 		}
 		if ( !in_js ) {
 			if ( !strncmp(token, "<script", 7) ) {
@@ -506,8 +516,12 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 			}
 			if ( ch == '<' ) // && !in_js )
 				alpha = 1;
+			if ( ch == '$' && in_php ) // php $vars
+				alpha = 1;
 		} else {
-			if ( ch == '/' && last == '<' && in_js )
+			if ( ch == '/' && last == '<' && in_js )	// </script>
+				alpha = 1;
+			if ( ch == '?' && last == '<' )				// <?php
 				alpha = 1;
 			if ( isalnum(ch) || legal(ch) ) alpha = 1;	// subsequent chars can be alphanumeric
 		}
@@ -533,13 +547,20 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 							//fprintf ( fd_out, "%s[f%d]", token, func_idx );
 							fprintf ( fd_out, "%s", token );
 						} else {
-							//strcpy ( ident, token );	// is an identifier
-							func_idx = known_func ( token );
-							if ( func_idx >= 0 ) {		// don't rewrite this function name
-								fprintf ( fd_out, "%s", token );
-							} else {
+							short rewriteIdent = 1;
+							if ( in_php ) {
+								if ( token[0] == '$' ) {	// turn off identifier rewrite in PHP vars
+									rewriteIdent = 0;
+								}
+							}
+							if ( known_func(token) >= 0 ) {
+								rewriteIdent = 0;
+							}
+							if ( rewriteIdent ) {
 								ident_idx = register_ident ( token );
 								fprintf ( fd_out, "%s_i%d", token, ident_idx );
+							} else {
+								fprintf ( fd_out, "%s", token );
 							}
 						}
 						//if ( ident_idx > 29 ) break;
