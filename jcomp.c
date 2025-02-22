@@ -35,9 +35,26 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out );
 unsigned long MMDoForAllFilesIn ( const char *directory, IterateProcPtr apply_proc );
 short MMFilePathExists ( const char *path );
 short MMCopyFile ( const char *source, const char *dest );
+char *MMFileExtension ( const char *path );
 short exclude_file ( char *fpath, struct FTW *ftwbuf );
 int get_globals_in_file ( const char *infile, const struct stat *sb, int tflag, struct FTW *ftwbuf );
 int process_file ( const char *infile, const struct stat *sb, int tflag, struct FTW *ftwbuf );
+
+char *gSkipFiles[] = {
+	"jcomp.c", "jquery", "jQueryRotate", "validate.js", "image-resize",
+	NULL
+};
+char *gReserved[] = {
+	"function", "if", "else", "for", "while", "return", "switch", "case", "break", "continue", "in", "of",
+	"var", "let", "const", "true", "false",
+	"isNaN", "Object", "Date", "Math", "atob", "btoa", "parseInt", "parseFloat", "encodeURI", "JSON",
+	"window", "document", "self", "this",
+	"typeof", "undefined", "null", "NULL",
+	"script", "/script", "<script>", "</script>", "type", "src", "ref",
+	"<?php", "empty", "foreach", "echo", "include",
+	"n", "nvar",
+	NULL
+};
 
 int main ( int argc, const char * argv[] ) {
 	int result = 0;
@@ -64,21 +81,8 @@ short is_reserved ( char *word )
 {
 	short res = 0;
 	int idx = 0;
-	char *reserved[] = {
-		"function", "if", "else", "for", "while", "return", "switch", "case", "break", "continue", "in", "of",
-		"var", "let", "const", "true", "false",
-		"isNaN", "Object", "Date", "Math", "atob", "btoa", "parseInt", "parseFloat",
-		"window", "document", "self", "this",
-		"typeof", "undefined", "null", "NULL",
-		"script", "<script", "</script", "/script", "type", "src", "ref",
-		"<?php", "empty", "foreach", "echo", "include",
-		NULL
-	};
-	if ( strstr(word, "<script") || strstr(word, "/script") ) {
-		short bp = 1;
-	}
 	for ( idx = 0; ; idx++ ) {
-		char *cand = reserved[idx];
+		char *cand = gReserved[idx];
 		if ( cand == NULL ) break;
 		if ( !strcmp(word, cand) ) {
 			res = 1; break;
@@ -112,7 +116,6 @@ int register_func ( char *name )
 			g_funcs[idx_f] = save;
 			found = idx_f++;
 		} else {
-			short bp = 1;
 			fprintf ( stderr, "MALLOC > 100 error\n" );
 			exit ( -1 );
 		}
@@ -153,9 +156,6 @@ int register_ident ( char *name )
 		if ( len < 100 ) {
 			char *save = (char *)malloc ( len + 1 );
 			strcpy ( save, name );
-			if ( name[0] == '1' ) {
-				short bp = 1;
-			}
 			g_idents[idx_i] = save;
 			found = idx_i++;
 		} else {
@@ -178,97 +178,145 @@ short legal ( char ch )			// other chars allowed in identifiers, like _ and -
 	return okay;
 }
 
+short check_alpha ( int idx, char ch, char last, short in_str, short in_js, short in_php )
+{
+	short alpha = 0;
+	if ( idx == 0 ) {
+		if ( isalpha(ch) ) alpha = 1;	// first char must be pure alpha
+		if ( ch == '<' ) // && !in_js )
+			alpha = 1;
+		if ( ch == '$' && in_php ) // php $vars
+			alpha = 1;
+	} else {
+		if ( ch == '>' )
+			alpha = 1;
+		if ( last == '<' && ch == '/' && in_js )	// </script>
+			alpha = 1;
+		if ( last == '<' && ch == '?' )				// <?php
+			alpha = 1;
+		if ( last == '<' && ch == '!' )				// <!
+			alpha = 1;
+		if ( isalnum(ch) || legal(ch) ) alpha = 1;	// subsequent chars can be alphanumeric
+	}
+	return alpha;
+}
+
 int find_functions_and_globals ( const char *infile, FILE *fd_in )
 {
 	int result = 0;
 	char ch = '\0', last = '\0';
 	FILE *fd = NULL;
-	char token[1024];
+	char token[1024], line[1024];
 	int count_ch=0, count_lines=1, count_com=0;
 	int func_idx=0;
-	int idx=0, lineCount = 1;
-	char line[1024];
+	int idx=0, cdx=0, lineCount = 1;
     short verbose = 0;
-	short in_com=0, ctype=0, in_str=0, stype=0, ftoke=0, slash=0, saw_dot=0;
+	short in_js=0, in_php=0, in_com=0, ctype=0, in_str=0, stype=0, ftoke=0, slash=0, saw_dot=0;
+	short trigger = 0;
 
+	char *ext = MMFileExtension(infile);
+	if ( !strcmp(ext, "shtml") ) {
+		verbose = 0;
+		printf ( "%s\n", infile );
+	}
 	while ( (ch = fgetc(fd_in)) != EOF ) {
 		short alpha = 0, end_com = 0, end_str = 0;
-
-		line[idx] = ch; line[idx+1] = '\0';
+		count_ch++;
+		if ( cdx <= 1022 ) {
+			line[cdx++] = ch; line[cdx] = '\0';
+		} else {
+			short bp = 1;
+		}
 		/* if ( !strcmp(infile,"./js/youtube.js") && ((lineCount == 88 || lineCount == 90) && ch == '(') ) {
 			debug if ( ftoke ) { char *last = g_funcs[idx_f-1]; short bp = 1; }
 		} */
 		switch ( ch ) {
-			case '{': case '}': case '(': case ')': case '[': case ']': ftoke = 0; break;
-			case ';': case ':': ftoke = 0; break;
+			case '\r': case '\n': 										count_lines++; cdx = 0; break;
+			case '{': case '}': case '(': case ')': case '[': case ']':
+			case ';': case ':':
+				if ( idx == 0 ) ftoke = 0;
+				break;
 		}
-		if ( in_com ) {
-			if ( ch == '/' && last == '*' && ctype == 2 ) { in_com = 0; end_com = 1; } /* end */
-			if ( ch == '\n' && ctype == 1 ) { in_com = 0; end_com = 1; } // end
+		if ( !in_php ) {
+			if ( !strncmp(token, "<?php", 5) ) {
+				in_php = 1;
+			}
 		} else {
-			if ( ch == '/' ) {
-				if ( slash ) {
-					in_com = 1; ctype = 1; count_com = 0;
+			if ( !strncmp(token, "?>", 2) ) {
+				in_php = 0;
+			}
+		}
+		if ( !in_js ) {
+			if ( !strncmp(token, "<script", 7) ) {
+				in_js = 1;
+			}
+		} else {
+			if ( !strncmp(token, "</script", 8) ) {
+				in_js = 0;
+			}
+		}
+		if ( in_js ) {
+			if ( in_com ) {
+				if ( ch == '/' && last == '*' && ctype == 2 ) { in_com = 0; end_com = 1; } /* end */
+				if ( ch == '\n' && ctype == 1 ) { in_com = 0; end_com = 1; } // end
+			} else {
+				if ( ch == '/' ) {
+					if ( slash ) {
+						in_com = 1; ctype = 1; count_com = 0;
+						//if ( commentPlan < 2 ) printf ( "/%c", ch );
+						slash = 0;
+					} else { slash = 1; }
+				} else if ( ch == '*' && slash ) {
+					in_com = 1; ctype = 2; count_com = 0;
 					//if ( commentPlan < 2 ) printf ( "/%c", ch );
 					slash = 0;
-				} else { slash = 1; }
-			} else if ( ch == '*' && slash ) {
-				in_com = 1; ctype = 2; count_com = 0;
-				//if ( commentPlan < 2 ) printf ( "/%c", ch );
-				slash = 0;
-			} else { slash = 0; }
-		}
-		if ( in_str ) {
-			if ( ch == '"' && stype == 1 && last != '\\' ) { in_str = 0; end_str = 1; } // end "
-			if ( ch == '\'' && stype == 2 && last != '\\' ) { in_str = 0; end_str = 1; } // end '
-			if ( ch == '`' && stype == 3 && last != '\\' ) { in_str = 0; end_str = 1; } // end `
-		} else {
-			if ( ch == '"' && !in_com ) { in_str = 1; stype = 1; } 	// begin "
-			if ( ch == '\'' && !in_com ) { in_str = 1; stype = 2; } // begin '
-			if ( ch == '`' && !in_com ) { in_str = 1; stype = 3; }  // begin `
-		}
-		if ( in_com || in_str ) {
-			last = ch;
-			if ( in_com && commentPlan > 0 ) count_com++;
-			continue;
-		}
-		if ( end_com || end_str ) {
-			last = ch;
-			if ( end_com ) {
-				if ( commentPlan == 1 ) {
-					//printf ( " %d elided", count_com );
-					//if ( ctype == 2 ) printf ( " *" );
+				} else { slash = 0; }
+			}
+			if ( in_str ) {
+				if ( ch == '"' && stype == 1 && last != '\\' ) { in_str = 0; end_str = 1; } // end "
+				if ( ch == '\'' && stype == 2 && last != '\\' ) { in_str = 0; end_str = 1; } // end '
+				if ( ch == '`' && stype == 3 && last != '\\' ) { in_str = 0; end_str = 1; } // end `
+			} else {
+				if ( ch == '"' && !in_com ) { in_str = 1; stype = 1; } 	// begin "
+				if ( ch == '\'' && !in_com ) { in_str = 1; stype = 2; } // begin '
+				if ( ch == '`' && !in_com ) { in_str = 1; stype = 3; }  // begin `
+			}
+			if ( in_com || in_str ) {
+				last = ch;
+				if ( in_com && commentPlan > 0 ) count_com++;
+				continue;
+			}
+			if ( end_com || end_str ) {
+				last = ch;
+				if ( end_com ) {
+					if ( commentPlan == 1 ) {
+						//printf ( " %d elided", count_com );
+						//if ( ctype == 2 ) printf ( " *" );
+					}
+					if ( commentPlan < 2 ) {
+						//printf ( "%c", ch );
+					}
 				}
-				if ( commentPlan < 2 ) {
+				if ( end_str ) {
 					//printf ( "%c", ch );
 				}
+				continue;
 			}
-			if ( end_str ) {
-				//printf ( "%c", ch );
-			}
-			continue;
 		}
-		if ( idx == 0 ) {
-			if ( isalpha(ch) ) alpha = 1;	// first char must be pure alpha
-		} else {
-			if ( isalnum(ch) || legal(ch) ) alpha = 1;	// subsequent chars can be alphanumeric
+		alpha = check_alpha ( idx, ch, last, in_str, in_js, in_php );
+		if ( alpha && last == '.' ) {	// special case for things like str.length
+			saw_dot = 1;
 		}
-		if ( ch == '\n' ) lineCount++;
+		if ( ch == '\n' ) { lineCount++; }
 		if ( alpha ) {
 			token[idx++] = ch;
 		} else if ( idx > 0 ) {				// end of token
 			//short reserved = 0;
 			token[idx] = '\0';
 			if ( !strcmp(token, "function") ) {
-				if ( !strcmp(infile,"./js/youtube.js") && lineCount == 88 ) {
-					short bp = 1;
-				}
 				ftoke = 1;
 			} else {
 				if ( ftoke && strlen(token) > 0 ) {
-					if ( !strcmp(token, "window") ) {
-						short bp = 1;
-					}
 					func_idx = register_func ( token );
 					if ( verbose ) printf ( "\tfunction %d: %s\n", func_idx, token );
 				}
@@ -288,10 +336,10 @@ int process_js ( const char *infile, FILE *fd_in, FILE *fd_out )
 	int result = 0;
 	int count_ch=0, count_lines=1, count_com=0;
 	char ch = '\0', last = '\0';
-	char token[1024];
+	char token[1024], line[1024];
 	int func_idx=0, ident_idx=0;
 	int idx=0, cdx=0;
-	short in_com=0, ctype=0, in_str=0, stype=0, ftoke=0, slash=0, saw_dot=0;
+	short verbose=1, in_com=0, ctype=0, in_str=0, stype=0, ftoke=0, slash=0, saw_dot=0;
 	//short idb=0, cdb=0;		// debug flags
 
 	token[0] = '\0';
@@ -299,12 +347,19 @@ int process_js ( const char *infile, FILE *fd_in, FILE *fd_out )
 	while ( (ch = fgetc(fd_in)) != EOF ) {
 		short alpha = 0, end_com = 0, end_str = 0;
 		count_ch++;
+		if ( cdx <= 1022 ) {
+			line[cdx++] = ch; line[cdx] = '\0';
+		} else {
+			short bp = 1;
+		}
 		if ( cdx == 0 && !in_com && lineNumbers ) { fprintf ( fd_out, "%03d: ", count_lines ); }
 		cdx++;
 		switch ( ch ) {
 			case '\r': case '\n': 										count_lines++; cdx = 0; break;
-			case '{': case '}': case '(': case ')': case '[': case ']':	ftoke = 0; break;
-			case ';': case ':':											ftoke = 0; break;
+			case '{': case '}': case '(': case ')': case '[': case ']':
+			case ';': case ':':
+				if ( idx == 0 ) ftoke = 0;
+				break;
 		}
 		if ( in_com ) {
 			if ( ch == '/' && last == '*' && ctype == 2 ) { in_com = 0; end_com = 1; } /* end */
@@ -358,13 +413,9 @@ int process_js ( const char *infile, FILE *fd_in, FILE *fd_out )
 			}
 			continue;
 		}
-		if ( idx == 0 ) {
-			if ( isalpha(ch) ) alpha = 1;	// first char must be pure alpha
-			if ( alpha && last == '.' ) {	// special case for things like str.length
-				saw_dot = 1;
-			}
-		} else {
-			if ( isalnum(ch) || legal(ch) ) alpha = 1;	// subsequent chars can be alphanumeric
+		alpha = check_alpha ( idx, ch, last, in_str, 0, 0 );
+		if ( alpha && last == '.' ) {	// special case for things like str.length
+			saw_dot = 1;
 		}
 		if ( alpha ) {
 			token[idx++] = ch;
@@ -419,10 +470,11 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 	int result = 0;
 	int count_ch=0, count_lines=1, count_com=0;
 	char ch = '\0', last = '\0';
-	char token[1024];
+	char token[1024], line[1024];
 	int func_idx=0, ident_idx=0;
 	int idx=0, cdx=0;
 	short in_js=0, in_php=0, in_com=0, ctype=0, in_str=0, stype=0, ftoke=0, slash=0, saw_dot=0;
+	short trigger = 0;
 	//short idb=0, cdb=0;		// debug flags
 
 	token[0] = '\0';
@@ -430,12 +482,19 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 	while ( (ch = fgetc(fd_in)) != EOF ) {
 		short alpha = 0, end_com = 0, end_str = 0;
 		count_ch++;
+		if ( cdx <= 1022 ) {
+			line[cdx++] = ch; line[cdx] = '\0';
+		} else {
+			short bp = 1;
+		}
 		if ( cdx == 0 && !in_com && lineNumbers ) { fprintf ( fd_out, "%03d: ", count_lines ); }
 		cdx++;
 		switch ( ch ) {
 			case '\r': case '\n': 										count_lines++; cdx = 0; break;
-			case '{': case '}': case '(': case ')': case '[': case ']':	ftoke = 0; break;
-			case ';': case ':':											ftoke = 0; break;
+			case '{': case '}': case '(': case ')': case '[': case ']':
+			case ';': case ':':
+				if ( idx == 0 ) ftoke = 0;
+				break;
 		}
 		if ( !in_php ) {
 			if ( !strncmp(token, "<?php", 5) ) {
@@ -509,21 +568,9 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 				continue;
 			}
 		}
-		if ( idx == 0 ) {
-			if ( isalpha(ch) ) alpha = 1;	// first char must be pure alpha
-			if ( alpha && last == '.' ) {	// special case for things like str.length
-				saw_dot = 1;
-			}
-			if ( ch == '<' ) // && !in_js )
-				alpha = 1;
-			if ( ch == '$' && in_php ) // php $vars
-				alpha = 1;
-		} else {
-			if ( ch == '/' && last == '<' && in_js )	// </script>
-				alpha = 1;
-			if ( ch == '?' && last == '<' )				// <?php
-				alpha = 1;
-			if ( isalnum(ch) || legal(ch) ) alpha = 1;	// subsequent chars can be alphanumeric
+		alpha = check_alpha ( idx, ch, last, in_str, in_js, in_php );
+		if ( alpha && last == '.' ) {	// special case for things like str.length
+			saw_dot = 1;
 		}
 		if ( alpha ) {
 			token[idx++] = ch;
@@ -537,7 +584,6 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 					if ( !strcmp(token, "function") ) ftoke = 1;
 					if ( !strcmp(token, "<script") ) {
 						short bp = 1;		// should never get here, if in_js is true
-						//fprintf ( fd_out, "%s", token );
 					}
 				} else {
 					if ( strlen(token) > 0 ) {
@@ -571,11 +617,21 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 				fprintf ( fd_out, "%s", token );
 			}
 			idx = 0;
+			//if ( !isspace(ch) ) {		// end of one token is not a space, likely <
+			if ( ch == '<' ) {			// end of one token is not a space, likely <
+				token[idx++] = ch;
+			}
 		}
 		if ( isspace(ch) || !isalnum(ch) ) saw_dot = 0;
 
 		if ( !alpha ) {
-			if ( !slash ) fprintf ( fd_out, "%c", ch );
+			if ( !slash ) {
+				if ( idx == 1 && ch == '<' ) {
+					// fprintf ( fd_out, "\n%c\n", ch );
+				} else {
+					fprintf ( fd_out, "%c", ch );
+				}
+			}
 		} else {
 			if ( slash ) {
 				if ( !in_com && commentPlan < 2 ) fprintf ( fd_out, "/" );
@@ -584,7 +640,6 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 		}
 		last = ch;
 	}
-
 	return result;
 }
 
@@ -661,6 +716,35 @@ char *MMFileExtension ( const char *path )
 	return start;
 }
 
+char *ext_pointer ( char *tmpfile )
+{
+	int len = (int)strlen ( tmpfile );
+	char *dot = tmpfile + len - 1;
+	while ( dot >= tmpfile ) {
+		if ( *dot == '.' ) break;
+		dot--;
+	}
+	if ( dot <= tmpfile ) dot = NULL;
+	return dot;
+}
+
+void ensure_bakfile ( const char *fpath, char *ext, char *bakfile )
+{
+	if ( bakfile ) {
+		strcpy ( bakfile, fpath );
+		char *dot = ext_pointer ( bakfile );
+		if ( dot ) {
+			*dot = '\0';	// chop extension
+			strcat ( bakfile, ".BAK." );
+			strcat ( bakfile, ext );
+		}
+		if ( !MMFilePathExists(bakfile) ) {
+			MMCopyFile( fpath, bakfile );
+		}
+	}
+}
+
+
 short exclude_file ( char *fpath, struct FTW *ftwbuf )
 {
 	char *filename = fpath + ftwbuf->base;
@@ -668,10 +752,6 @@ short exclude_file ( char *fpath, struct FTW *ftwbuf )
 	short exclude = 0;
 	int idx = 0;
 	short good_ext = 0;
-	char *files[] = {
-		"jcomp.c", "jquery", "jQueryRotate", "image-resize",
-		NULL
-	};
 	ext = MMFileExtension ( fpath );
 	if ( strstr(fpath, ".BAK") ) return 1;
 	if ( !strcmp(ext,"html") || !strcmp(ext,"shtml") ) good_ext = 1;
@@ -680,7 +760,7 @@ short exclude_file ( char *fpath, struct FTW *ftwbuf )
 		exclude = 1;
 
 	for ( idx = 0; ; idx++ ) {
-		char *cand = files[idx];
+		char *cand = gSkipFiles[idx];
 		if ( cand == NULL ) break;
 		if ( !strncmp(filename, cand, strlen(cand)) ) {
 			exclude = 1; break;
@@ -694,6 +774,8 @@ int get_globals_in_file ( const char *fpath, const struct stat *sb, int tflag, s
 {
     #pragma unused ( sb )
 	FILE *fd_in = NULL, *fd_out = NULL;
+	char *infile = NULL, *ext = NULL;
+	char bakfile[1024];
 	short verbose = 0;
 
 	if ( tflag == DIRECTORY )  return 0;
@@ -702,26 +784,27 @@ int get_globals_in_file ( const char *fpath, const struct stat *sb, int tflag, s
 		if ( verbose ) printf ( "EXCLUDE %s\n", fpath );
 		return 0;
 	}
+	ext = MMFileExtension ( fpath );
+		strcpy ( bakfile, fpath );
+		char *dot = ext_pointer ( bakfile );
+		if ( dot ) {
+			*dot = '\0';	// chop extension
+			strcat ( bakfile, ".BAK." );
+			strcat ( bakfile, ext );
+		}
+		if ( !MMFilePathExists(bakfile) ) {
+			MMCopyFile( fpath, bakfile );
+		}
+	infile = bakfile;
+
 	fd_in = fopen ( fpath, "r" );
 	if ( !fd_in ) { printf ( "Cannot read %s\n", fpath ); return -1; }
 
-	find_functions_and_globals ( fpath, fd_in );
+	find_functions_and_globals ( infile, fd_in );
 
 	if ( fd_in  && fd_in  != stdin )  fclose ( fd_in );
 
 	return 0;           /* To tell nftw() to continue */
-}
-
-char *ext_pointer ( char *tmpfile )
-{
-	int len = (int)strlen ( tmpfile );
-	char *dot = tmpfile + len - 1;
-	while ( dot >= tmpfile ) {
-		if ( *dot == '.' ) break;
-		dot--;
-	}
-	if ( dot <= tmpfile ) dot = NULL;
-	return dot;
 }
 
 int process_file ( const char *fpath, const struct stat *sb, int tflag, struct FTW *ftwbuf )
@@ -734,13 +817,10 @@ int process_file ( const char *fpath, const struct stat *sb, int tflag, struct F
 	char *infile = NULL, *outfile = NULL;
 	char *ext = NULL;
 	int len = 0;
-	short verbose=0, use_stdout = 0;
+	short verbose=1, use_stdout = 0;
 
 	if ( tflag == DIRECTORY )  return 0;
 
-	if ( !strcmp(fpath, "./js") ) {
-		short bp = 1;
-	}
 	if ( exclude_file(fpath, ftwbuf) ) {
 		if ( verbose ) printf ( "EXCLUDE %s\n", fpath );
 		return 0;
@@ -750,16 +830,16 @@ int process_file ( const char *fpath, const struct stat *sb, int tflag, struct F
 		if ( verbose ) printf ( "EXCLUDE %s\n", fpath );
 		return 0;
 	}
-	strcpy ( bakfile, fpath );
-	char *dot = ext_pointer ( bakfile );
-	if ( dot ) {
-		*dot = '\0';	// chop extension
-		strcat ( bakfile, ".BAK." );
-		strcat ( bakfile, ext );
-	}
-	if ( !MMFilePathExists(bakfile) ) {
-		MMCopyFile( fpath, bakfile );
-	}
+		strcpy ( bakfile, fpath );
+		char *dot = ext_pointer ( bakfile );
+		if ( dot ) {
+			*dot = '\0';	// chop extension
+			strcat ( bakfile, ".BAK." );
+			strcat ( bakfile, ext );
+		}
+		if ( !MMFilePathExists(bakfile) ) {
+			MMCopyFile( fpath, bakfile );
+		}
 	infile = bakfile;
 	outfile = fpath;
 	fd_in = fopen ( infile, "r" );
