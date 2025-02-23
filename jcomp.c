@@ -581,9 +581,6 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 				in_php = 1;
 			}
 		} else {
-			if ( ch == '?' ) {
-				short bp = 1;
-			}
 			if ( !strncmp(token, "?>", 2) ) {
 				in_php = 0;
 			}
@@ -723,9 +720,6 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 		if ( isspace(ch) || !isalnum(ch) ) saw_dot = 0;
 
 		if ( !alpha ) {
-			if ( !strcmp(token,"replace") ) {
-				short bp = 1;
-			}
 			if ( !slash && idx == 1 && ch == '<' ) suppress = 1;
 			if ( !suppress ) fprintf ( fd_out, "%c", ch );
 		} else {
