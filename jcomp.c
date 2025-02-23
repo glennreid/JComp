@@ -50,7 +50,7 @@ char *gReserved[] = {
 	"isNaN", "Object", "Date", "Math", "atob", "btoa", "parseInt", "parseFloat", "encodeURI", "JSON",
 	"window", "document", "self", "this",
 	"typeof", "undefined", "null", "NULL",
-	"script", "/script", "<script>", "</script>", "type", "src", "ref",
+	"script", "/script", "<script", "<script>", "</script>", "type", "src", "ref",
 	"<?php", "empty", "foreach", "echo", "include",
 	"n", "nvar",
 	NULL
