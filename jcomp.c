@@ -53,7 +53,7 @@ char *gSkipFiles[] = {
 };
 char *gReserved[] = {
 	"function", "if", "else", "for", "while", "return", "switch", "case", "break", "continue", "in", "of",
-	"var", "let", "const", "true", "false",
+	"var", "let", "const", "true", "false", "new",
 	"isNaN", "Object", "Date", "Math", "atob", "btoa", "parseInt", "parseFloat", "encodeURI", "JSON",
 	"window", "document", "self", "this",
 	"typeof", "undefined", "null", "NULL",
@@ -286,7 +286,7 @@ int find_functions_and_globals ( const char *infile, FILE *fd_in )
 			if ( in_com ) {
 				if ( ch == '/' && last == '*' && ctype == 2 ) { in_com = 0; end_com = 1; } /* end */
 				if ( ch == '\n' && ctype == 1 ) { in_com = 0; end_com = 1; } // end
-			} else {
+			} else if ( !in_str ) {							// ignore slashes inside string bodies
 				if ( ch == '/' ) {
 					if ( slash ) {
 						in_com = 1; ctype = 1; count_com = 0;
@@ -391,7 +391,7 @@ int process_js ( const char *infile, FILE *fd_in, FILE *fd_out )
 		if ( in_com ) {
 			if ( ch == '/' && last == '*' && ctype == 2 ) { in_com = 0; end_com = 1; } /* end */
 			if ( ch == '\n' && ctype == 1 ) { in_com = 0; end_com = 1; } // end
-		} else {
+		} else if ( !in_str ) {							// ignore slashes inside string bodies
 			if ( ch == '/' ) {
 				if ( slash ) {
 					in_com = 1; ctype = 1; count_com = 0;
@@ -561,7 +561,7 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 			if ( in_com ) {
 				if ( ch == '/' && last == '*' && ctype == 2 ) { in_com = 0; end_com = 1; } /* end */
 				if ( ch == '\n' && ctype == 1 ) { in_com = 0; end_com = 1; } // end
-			} else if ( !in_str ) {
+			} else if ( !in_str ) {							// ignore slashes inside string bodies
 				if ( ch == '/' && last != '<' ) {
 					if ( slash ) {
 						in_com = 1; ctype = 1; count_com = 0;
