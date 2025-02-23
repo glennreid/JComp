@@ -16,6 +16,9 @@
 #define __USE_XOPEN_EXTENDED 1
 #include <ftw.h>
 
+#define EXCLUDE 0
+#define ALLOW   1
+
 char *g_funcs[1024];
 char *g_idents[4096];
 int idx_f = 0, idx_i = 0;
@@ -29,6 +32,10 @@ typedef int IterateProcPtr (const char *filename, const struct stat *statptr, in
 
 // function prototypes
 short is_reserved ( char *word );
+int known_func ( char *name );
+int register_func ( char *name );
+int known_ident ( char *name );
+int register_ident ( char *name );
 int find_functions_and_globals ( const char *infile, FILE *fd_in );
 int process_js ( const char *infile, FILE *fd_in, FILE *fd_out );
 int process_html ( const char *infile, FILE *fd_in, FILE *fd_out );
@@ -36,7 +43,7 @@ unsigned long MMDoForAllFilesIn ( const char *directory, IterateProcPtr apply_pr
 short MMFilePathExists ( const char *path );
 short MMCopyFile ( const char *source, const char *dest );
 char *MMFileExtension ( const char *path );
-short exclude_file ( char *fpath, struct FTW *ftwbuf );
+short good_file ( const char *fpath, struct FTW *ftwbuf );
 int get_globals_in_file ( const char *infile, const struct stat *sb, int tflag, struct FTW *ftwbuf );
 int process_file ( const char *infile, const struct stat *sb, int tflag, struct FTW *ftwbuf );
 
@@ -50,7 +57,7 @@ char *gReserved[] = {
 	"isNaN", "Object", "Date", "Math", "atob", "btoa", "parseInt", "parseFloat", "encodeURI", "JSON",
 	"window", "document", "self", "this",
 	"typeof", "undefined", "null", "NULL",
-	"script", "/script", "<script", "<script>", "</script>", "type", "src", "ref",
+	"<", "script", "/script", "<script", "<script>", "</script>", "type", "src", "ref",
 	"<?php", "empty", "foreach", "echo", "include",
 	"n", "nvar",
 	NULL
@@ -73,6 +80,10 @@ int main ( int argc, const char * argv[] ) {
 	printf ( "%d functions\n", idx_f );
 	MMDoForAllFilesIn ( ".", process_file );
 	printf ( "%d identifiers\n", idx_i );
+
+	if ( known_func("objectType") ) {
+		printf ( "objectType was declared as a function\n" );
+	}
 
 	return result;
 }
@@ -178,6 +189,24 @@ short legal ( char ch )			// other chars allowed in identifiers, like _ and -
 	return okay;
 }
 
+short valid_ident ( char *token )
+{
+	char first = '\0', second = '\0';
+	short valid = 1;
+	if ( strstr(token, "0-9") ) {
+		short bp = 1;
+	}
+	if ( !token ) 							return EXCLUDE;
+	first = token[0];
+	second = token[1];
+	if ( !isalpha(first) ) 					valid = 0;
+	if ( first == '$' ) 					valid = 1;
+	if ( first == '<' && second == '\0' )	valid = 1;
+	if ( strstr(token, "A-Z") )	// regular expressions pass through
+			valid = 0;
+	return valid;
+}
+
 short check_alpha ( int idx, char ch, char last, short in_str, short in_js, short in_php )
 {
 	short alpha = 0;
@@ -215,21 +244,19 @@ int find_functions_and_globals ( const char *infile, FILE *fd_in )
 	short trigger = 0;
 
 	char *ext = MMFileExtension(infile);
-	if ( !strcmp(ext, "shtml") ) {
-		verbose = 0;
-		printf ( "%s\n", infile );
-	}
+
 	while ( (ch = fgetc(fd_in)) != EOF ) {
 		short alpha = 0, end_com = 0, end_str = 0;
 		count_ch++;
 		if ( cdx <= 1022 ) {
-			line[cdx++] = ch; line[cdx] = '\0';
+			line[cdx] = ch; line[cdx+1] = '\0';
 		} else {
 			short bp = 1;
 		}
 		/* if ( !strcmp(infile,"./js/youtube.js") && ((lineCount == 88 || lineCount == 90) && ch == '(') ) {
 			debug if ( ftoke ) { char *last = g_funcs[idx_f-1]; short bp = 1; }
 		} */
+		cdx++;
 		switch ( ch ) {
 			case '\r': case '\n': 										count_lines++; cdx = 0; break;
 			case '{': case '}': case '(': case ')': case '[': case ']':
@@ -339,7 +366,7 @@ int process_js ( const char *infile, FILE *fd_in, FILE *fd_out )
 	char token[1024], line[1024];
 	int func_idx=0, ident_idx=0;
 	int idx=0, cdx=0;
-	short verbose=1, in_com=0, ctype=0, in_str=0, stype=0, ftoke=0, slash=0, saw_dot=0;
+	short verbose=1, in_com=0, ctype=0, in_str=0, stype=0, ftoke=0, slash=0, saw_dot=0, suppress=0;
 	//short idb=0, cdb=0;		// debug flags
 
 	token[0] = '\0';
@@ -348,7 +375,7 @@ int process_js ( const char *infile, FILE *fd_in, FILE *fd_out )
 		short alpha = 0, end_com = 0, end_str = 0;
 		count_ch++;
 		if ( cdx <= 1022 ) {
-			line[cdx++] = ch; line[cdx] = '\0';
+			line[cdx] = ch; line[cdx+1] = '\0';
 		} else {
 			short bp = 1;
 		}
@@ -368,13 +395,13 @@ int process_js ( const char *infile, FILE *fd_in, FILE *fd_out )
 			if ( ch == '/' ) {
 				if ( slash ) {
 					in_com = 1; ctype = 1; count_com = 0;
-					if ( commentPlan < 2 ) fprintf ( fd_out, "/%c", ch );		// out
-					slash = 0;
+					if ( commentPlan < 2 ) fprintf ( fd_out, "%c", ch );		// out
+					slash = 0; suppress = 1;
 				} else { slash = 1; }
 			} else if ( ch == '*' && slash ) {
 				in_com = 1; ctype = 2; count_com = 0;
-				if ( commentPlan < 2 ) fprintf ( fd_out, "/%c", ch );			// out
-				slash = 0;
+				if ( commentPlan < 2 ) fprintf ( fd_out, "%c", ch );			// out
+				slash = 0; // suppress = 1;
 			} else { slash = 0; }
 		}
 		if ( in_str ) {
@@ -422,23 +449,37 @@ int process_js ( const char *infile, FILE *fd_in, FILE *fd_out )
 		} else if ( idx > 0 ) {				// end of token
 			short reserved = 0;
 			token[idx] = '\0';				// null-terminate
+			if ( 1 ) { // debug
+				int ndx = known_ident ( token );
+				char *dfile = strstr ( infile, "util.js" );
+				if ( dfile ) {
+					short bp = 1;
+				}
+				//if ( ndx == 309 && dfile ) {	// catch specific token
+				if ( strstr(token, "found") && dfile ) {	// catch specific token
+					int bp = count_lines;
+					char *look = line;
+				}
+			}
 			reserved = is_reserved ( token );
 			if ( reserved || saw_dot ) {
 				fprintf ( fd_out, "%s", token );
 				if ( !strcmp(token, "function") ) ftoke = 1;
 			} else {
 				if ( strlen(token) > 0 ) {
-					if ( ftoke ) {
-						//strcpy ( func, token );		// is a function name
+					if ( ftoke ) {					// is a function name
 						func_idx = register_func ( token );
 						//fprintf ( fd_out, "%s[f%d]", token, func_idx );
 						fprintf ( fd_out, "%s", token );
-					} else {
-						//strcpy ( ident, token );	// is an identifier
+					} else {						// is an identifier
+						short valid = valid_ident ( token );
 						func_idx = known_func ( token );
-						if ( func_idx >= 0 ) {		// don't rewrite this function name
+						if ( !valid || func_idx >= 0 ) {		// don't rewrite this identifier
 							fprintf ( fd_out, "%s", token );
 						} else {
+							if ( !isalpha(token[0]) ) {
+								short bp = 1;
+							}
 							ident_idx = register_ident ( token );
 							fprintf ( fd_out, "%s_i%d", token, ident_idx );
 						}
@@ -452,13 +493,15 @@ int process_js ( const char *infile, FILE *fd_in, FILE *fd_out )
 		if ( isspace(ch) || !isalnum(ch) ) saw_dot = 0;
 
 		if ( !alpha ) {
-			if ( !slash ) fprintf ( fd_out, "%c", ch );
+			//if ( !slash || !strcmp(token,"match") ) fprintf ( fd_out, "%c", ch );
+			if ( !suppress ) fprintf ( fd_out, "%c", ch );
 		} else {
 			if ( slash ) {
-				if ( !in_com && commentPlan < 2 ) fprintf ( fd_out, "/" );
+				if ( !suppress && !in_com && commentPlan < 2 ) fprintf ( fd_out, "/" );
 				slash = 0;
 			}
 		}
+		suppress = 0;
 		last = ch;
 	}
 
@@ -483,7 +526,7 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 		short alpha = 0, end_com = 0, end_str = 0;
 		count_ch++;
 		if ( cdx <= 1022 ) {
-			line[cdx++] = ch; line[cdx] = '\0';
+			line[cdx] = ch; line[cdx+1] = '\0';
 		} else {
 			short bp = 1;
 		}
@@ -652,7 +695,7 @@ unsigned long MMDoForAllFilesIn ( const char *directory, IterateProcPtr apply_pr
 	int result = 0;
 	//short reallyDelete = 0;
 	short viewFiles = 1;
-	int flags = FTW_PHYS | FTW_DEPTH;		// do not follow symbolic links; depth-first traversal
+	int flags = FTW_PHYS | FTW_DEPTH;	// do not follow symbolic links; depth-first traversal
 
 	if ( MMFilePathExists(directory) ) {
 		// traverse the file tree and call apply_proc
@@ -685,6 +728,64 @@ short MMFilePathExists ( const char *path )
 	}
 	return exists;
 }
+
+void MMDeleteFile ( char *filePath )
+{
+	if ( MMFilePathExists(filePath) ) {
+		unlink ( filePath );
+	}
+}
+
+#define PATH_SEP '/'
+
+char *_nextslash ( char *path )
+{
+	char *result = path + 1;
+	while ( result && *result && *result != PATH_SEP ) {
+		result++;
+	}
+	return result;
+}
+
+int MMMakeDir ( char *path, mode_t mode )
+{
+	int err = 0;
+	struct stat statbuff;
+	char buffer[4096];
+	char *partial = NULL, *end = NULL;
+	short last = 0, verbose = 0;
+
+	if ( !path) return -1;
+	strcpy ( buffer, path );
+	partial = buffer;
+	end = _nextslash(partial);
+	while ( partial && end ) {
+		if ( *end != '/' ) {
+			last = 1;
+		} else {
+			*end = '\0';	// temporarily terminate path at slashes to make intermediate dirs
+		}
+		if ( stat(buffer, &statbuff) ) {        // does not exist
+			err = mkdir(partial, mode);
+			if ( stat(partial, &statbuff) ) {
+				if ( err < 0 ) {
+					fprintf ( stderr, "Can't create %s\n", partial);
+					break;
+				}
+			}
+			chmod(partial, mode);
+			if ( verbose ) fprintf ( stderr, "MAKE: %s\n", partial);
+		} else {
+			// if ( verbose ) fprintf ( stderr, "EXISTS: %s\n", partial);
+		}
+		if ( last ) break;
+		*end = PATH_SEP;
+		end = _nextslash(end);
+
+	}
+	return err;
+}
+
 
 short MMCopyFile ( const char *source, const char *dest )
 {
@@ -728,63 +829,50 @@ char *ext_pointer ( char *tmpfile )
 	return dot;
 }
 
-void ensure_bakfile ( const char *fpath, char *ext, char *bakfile )
+short good_file ( const char *fpath, struct FTW *ftwbuf )
 {
-	if ( bakfile ) {
-		strcpy ( bakfile, fpath );
-		char *dot = ext_pointer ( bakfile );
-		if ( dot ) {
-			*dot = '\0';	// chop extension
-			strcat ( bakfile, ".BAK." );
-			strcat ( bakfile, ext );
-		}
-		if ( !MMFilePathExists(bakfile) ) {
-			MMCopyFile( fpath, bakfile );
-		}
-	}
-}
-
-
-short exclude_file ( char *fpath, struct FTW *ftwbuf )
-{
-	char *filename = fpath + ftwbuf->base;
+	char *filename = (char *)fpath + ftwbuf->base;
 	char *ext = NULL;
-	short exclude = 0;
+	short result = ALLOW;
 	int idx = 0;
-	short good_ext = 0;
-	ext = MMFileExtension ( fpath );
-	if ( strstr(fpath, ".BAK") ) return 1;
-	if ( !strcmp(ext,"html") || !strcmp(ext,"shtml") ) good_ext = 1;
-	if ( !strcmp(ext,"js") ) good_ext = 1;
-	if ( !good_ext )
-		exclude = 1;
 
+	// ignore certain directories (.git), BAK files, look for html and js only:
+	ext = MMFileExtension ( fpath );
+	if ( filename[0] == '.' ) 							return EXCLUDE;
+	if ( !ext || strlen(ext) == 0 )						return EXCLUDE;
+	if ( strstr(fpath, ".git") )		 				return EXCLUDE;
+	if ( strstr(fpath, "BAK") ) 						return EXCLUDE;
+	if ( !strcmp(ext,"html") || !strcmp(ext,"shtml") )	result = ALLOW;
+	if ( !strcmp(ext,"js") ) 							result = ALLOW;
+
+	// but check for a match list of files to exclude:
 	for ( idx = 0; ; idx++ ) {
 		char *cand = gSkipFiles[idx];
 		if ( cand == NULL ) break;
 		if ( !strncmp(filename, cand, strlen(cand)) ) {
-			exclude = 1; break;
+			result = EXCLUDE; break;
 		}
 	}
-	return exclude;
+	return result;
 }
 
+static char s_bakfile[1024];
 
-int get_globals_in_file ( const char *fpath, const struct stat *sb, int tflag, struct FTW *ftwbuf )
+char *ensure_bakfile ( const char *fpath, struct FTW *ftwbuf )
 {
-    #pragma unused ( sb )
-	FILE *fd_in = NULL, *fd_out = NULL;
-	char *infile = NULL, *ext = NULL;
-	char bakfile[1024];
-	short verbose = 0;
-
-	if ( tflag == DIRECTORY )  return 0;
-
-	if ( exclude_file(fpath, ftwbuf) ) {
-		if ( verbose ) printf ( "EXCLUDE %s\n", fpath );
-		return 0;
-	}
-	ext = MMFileExtension ( fpath );
+	char *filename = (char *)fpath + ftwbuf->base;
+	if ( fpath ) {
+		strncpy ( s_bakfile, fpath, ftwbuf->base );
+		s_bakfile[ftwbuf->base] = '\0';
+		strcat ( s_bakfile, "BAK/" );
+		if ( !MMFilePathExists(s_bakfile) ) {
+			MMMakeDir ( s_bakfile, 0755 );
+		}
+		strcat ( s_bakfile, filename );
+		if ( !MMFilePathExists(s_bakfile) ) {
+			MMCopyFile( fpath, s_bakfile );
+		}
+		/*
 		strcpy ( bakfile, fpath );
 		char *dot = ext_pointer ( bakfile );
 		if ( dot ) {
@@ -792,13 +880,44 @@ int get_globals_in_file ( const char *fpath, const struct stat *sb, int tflag, s
 			strcat ( bakfile, ".BAK." );
 			strcat ( bakfile, ext );
 		}
-		if ( !MMFilePathExists(bakfile) ) {
-			MMCopyFile( fpath, bakfile );
-		}
-	infile = bakfile;
+		*/
+	}
+	return s_bakfile;
+}
 
-	fd_in = fopen ( fpath, "r" );
-	if ( !fd_in ) { printf ( "Cannot read %s\n", fpath ); return -1; }
+// First-pass function to collect globals. Does not modify anything
+int get_globals_in_file ( const char *fpath, const struct stat *sb, int tflag, struct FTW *ftwbuf )
+{
+    #pragma unused ( sb )
+	FILE *fd_in = NULL, *fd_out = NULL;
+	char *infile = NULL, *bakfile = NULL, *ext = NULL;
+	short verbose = 0;
+
+	if ( tflag == DIRECTORY )  return 0;
+
+	if ( !good_file(fpath, ftwbuf) ) {
+		if ( verbose ) printf ( "EXCLUDE %s\n", fpath );
+		return 0;
+	}
+	bakfile = ensure_bakfile ( fpath, ftwbuf );
+	ext = MMFileExtension ( fpath );
+	/*
+	strcpy ( bakfile, fpath );
+	char *dot = ext_pointer ( bakfile );
+	if ( dot ) {
+		*dot = '\0';	// chop extension
+		strcat ( bakfile, ".BAK." );
+		strcat ( bakfile, ext );
+	}
+	if ( !MMFilePathExists(bakfile) ) {
+		MMCopyFile( fpath, bakfile );
+	}
+	*/
+	infile = bakfile;
+	if ( verbose ) printf ( "GLOBALS: %s\n", infile );
+
+	fd_in = fopen ( infile, "r" );
+	if ( !fd_in ) { printf ( "Cannot read %s\n", infile ); return -1; }
 
 	find_functions_and_globals ( infile, fd_in );
 
@@ -813,35 +932,33 @@ int process_file ( const char *fpath, const struct stat *sb, int tflag, struct F
 	//char *filename = fpath + ftwbuf->base;
 
 	FILE *fd_in = NULL, *fd_out = NULL;
-	char bakfile[1024];
-	char *infile = NULL, *outfile = NULL;
+	char *infile = NULL, *outfile = NULL, *bakfile = NULL;
 	char *ext = NULL;
 	int len = 0;
-	short verbose=1, use_stdout = 0;
+	short verbose = 0, use_stdout = 0;
 
 	if ( tflag == DIRECTORY )  return 0;
 
-	if ( exclude_file(fpath, ftwbuf) ) {
+	if ( !good_file(fpath, ftwbuf) ) {
 		if ( verbose ) printf ( "EXCLUDE %s\n", fpath );
 		return 0;
 	}
+	bakfile = ensure_bakfile ( fpath, ftwbuf );
 	ext = MMFileExtension ( fpath );
-	if ( !ext || strlen(ext) == 0 ) {
-		if ( verbose ) printf ( "EXCLUDE %s\n", fpath );
-		return 0;
+	/*
+	strcpy ( bakfile, fpath );
+	char *dot = ext_pointer ( bakfile );
+	if ( dot ) {
+		*dot = '\0';	// chop extension
+		strcat ( bakfile, ".BAK." );
+		strcat ( bakfile, ext );
 	}
-		strcpy ( bakfile, fpath );
-		char *dot = ext_pointer ( bakfile );
-		if ( dot ) {
-			*dot = '\0';	// chop extension
-			strcat ( bakfile, ".BAK." );
-			strcat ( bakfile, ext );
-		}
-		if ( !MMFilePathExists(bakfile) ) {
-			MMCopyFile( fpath, bakfile );
-		}
+	if ( !MMFilePathExists(bakfile) ) {
+		MMCopyFile( fpath, bakfile );
+	}
+	*/
 	infile = bakfile;
-	outfile = fpath;
+	outfile = (char *)fpath;
 	fd_in = fopen ( infile, "r" );
 	if ( !fd_in ) {
 		printf ( "Cannot read %s\n", infile ); return -1; }
@@ -856,7 +973,7 @@ int process_file ( const char *fpath, const struct stat *sb, int tflag, struct F
 	}
 
 	if ( !strcmp(ext,"html") || !strcmp(ext,"shtml") ) {
-		printf ( "HTML FILE: %s\n", infile );
+		if ( verbose ) printf ( "HTML FILE: %s\n", infile );
 		process_html ( infile, fd_in, fd_out );
 	}
 	if ( !strcmp(ext,"js") ) {
