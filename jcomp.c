@@ -5,7 +5,11 @@
 //  Created by Glenn Reid on 2/21/25.
 //
 //  Compile: gcc -o jcomp jcomp.c'
-//  Usage:   ./jcomp [-v]
+//  Usage:   jcomp [-v] [-n]numerlines [-t]ight [-l]oose [-w]arn [-q]uiet [-d]ata [-c]omments
+//
+//  jcomp -c 0		// comments are preserved
+//  jcomp -c 1		// comments are elided but visible
+//  jcomp -c 2		// comments are removed
 //
 
 #include <stdio.h>
@@ -23,27 +27,26 @@
 #define ALLOW   1
 #define MAX_FUNCTIONS 1024
 #define MAX_IDENTS (4096 * 2)
+#define MAX_LINE 2048
 
 char *g_funcs[MAX_FUNCTIONS];
 char *g_idents[MAX_IDENTS];
 int idx_f = 0, idx_i = 0;
 char *g_currfile = NULL;
 
-//short commentPlan = 1;		// 0 = keep, 1 = elide, 2 = drop
-//short lineNumbers = 0;
+// g_pref
+struct {
+	short lineNums;		// emit line numbers at the beginning of every line (mostly for debugging)
+	short commentPlan;	// 0 = keep, 1 = elide, 2 = eliminate [default 1]
+	short parseTicks;	// not even sure what this does anymore
+	short verbose;		// tempted to write a really long comment here to describe what verbose means
+	short tight;		// make identifiers and function names 1 char vs full original identigier
+	short warn;			// emit warnings on stderr [default 1]
+	short data;			// write out identifiers.txt and functions.txt
+} g_pref = { 0, 1, 0, 0, 1, 1, 0 };
 
-struct _prefs {
-	short lineNums;
-	short commentPlan;
-	short parseTicks;
-} prefs = { 0, 1, 0 };
-
-struct _count {
-	int js;
-	int html;
-	int php;
-	int skip;
-} g_count = { 0, 0, 0, 0 };
+// g_count
+struct { int js; int html; int php; int skip; } g_count = { 0, 0, 0, 0 };
 
 #define DIRECTORY FTW_D
 typedef struct FTW *sftwptr;
@@ -56,8 +59,8 @@ int known_func ( char *name );
 int register_func ( char *name );
 int known_ident ( char *name );
 int register_ident ( char *name );
-int find_functions_and_globals ( const char *infile, FILE *fd_in );
-int process_js ( const char *infile, FILE *fd_in, FILE *fd_out );
+int find_functions ( const char *infile, FILE *fd_in );
+//int process_js ( const char *infile, FILE *fd_in, FILE *fd_out );
 int process_html ( const char *infile, FILE *fd_in, FILE *fd_out );
 unsigned long MMDoForAllFilesIn ( const char *directory, IterateProcPtr apply_proc );
 short MMFilePathExists ( const char *path );
@@ -75,12 +78,22 @@ char *g_allow_files[] = {
 	"main_setup.php",
 	NULL
 };
-char *g_reserved[] = {
+char *g_reserved[] = { // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects
 	"function", "if", "else", "for", "while", "return", "switch", "case", "break", "continue", "in", "of",
-	"var", "let", "const", "true", "false", "new", "typeof", "undefined", "null", "NULL",
-	"isNaN", "Object", "Date", "Math", "atob", "btoa", "parseInt", "parseFloat", "encodeURI", "JSON",
+	"var", "let", "const", "true", "false", "new", "typeof", "undefined", "null", "NULL", "NaN",
+	"eval", "decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent", "escape", "unescape",
+	"isNaN", "Object", "Date", "Number", "BigInt", "Math", "Temporal", "String", "RegExp",
+	"Array", "Int8Array", "Uint8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array", "Int32Array",
+	"Uint32Array", "BigInt64Array", "BigUint64Array", "Float16Array", "Float32Array", "Float64Array",
+	"Map", "Set", "WeakMap", "WeakSet", "ArrayBuffer", "SharedArrayBuffer", "DataView", "Atomics", "JSON",
+	"WeakRef", "FinalizationRegistry", "Iterator", "AsyncIterator", "Promise", "GeneratorFunction",
+	"AsyncGeneratorFunction", "Generator", "AsyncGenerator", "AsyncFunction", "Reflect", "Proxy",
+	"Intl", "Intl.Collator", "Intl.DateTimeFormat", "Intl.DisplayNames", "Intl.DurationFormat", "Intl.ListFormat",
+	"Intl.Locale", "Intl.NumberFormat", "Intl.PluralRules", "Intl.RelativeTimeFormat", "Intl.Segmenter",
+	"Function", "Boolean", "Symbol", "Error", "AggregateError", "EvalError", "RangeError", "ReferenceError",
+	"SyntaxError", "TypeError", "URIError", "InternalError",
 	"window", "document", "self", "this", "success", "error", "console",
-	"setTimeout", "clearTimeout",
+	"setTimeout", "clearTimeout", "atob", "btoa", "parseInt", "parseFloat", "encodeURI", "JSON",
 	"<", "script", "/script", "<script", "<script>", "</script>", "type", "src", "ref",
 	"<?php", "?>", "empty", "foreach", "echo", "include", "PARAM",
 	"\n", "n", ";\n", "g", "nvar", "Location", "http", "https",
@@ -90,7 +103,6 @@ char *g_reserved[] = {
 	"cPage", "is_mobile",
 	NULL
 };
-char g_verbose = 0;
 
 int main ( int argc, const char * argv[] ) {
 	int result = 0;
@@ -99,8 +111,16 @@ int main ( int argc, const char * argv[] ) {
 	//char *ext = "";
     char cwd[1024];
 
+	// command line switches:
 	for ( idx = 1; idx < argc; idx++ ) {
-		if ( !strcmp(argv[idx], "-v") ) g_verbose = 1;
+		if ( !strcmp(argv[idx], "-v") ) g_pref.verbose = 1;
+		if ( !strcmp(argv[idx], "-n") ) g_pref.lineNums = 1;
+		if ( !strcmp(argv[idx], "-t") ) g_pref.tight = 1;
+		if ( !strcmp(argv[idx], "-l") ) g_pref.tight = 0;
+		if ( !strcmp(argv[idx], "-w") ) g_pref.warn = 1;
+		if ( !strcmp(argv[idx], "-q") ) g_pref.warn = 0;
+		if ( !strcmp(argv[idx], "-d") ) g_pref.data = 1;
+		if ( !strcmp(argv[idx], "-c") ) if ( idx+1 < argc ) { sscanf(argv[idx+1], "%hd", &g_pref.commentPlan); }
 	}
     getcwd(cwd, sizeof(cwd));
     if ( !strcmp(cwd, "/Users/glenn/CODE/JComp/Build/Products/Debug") ) {
@@ -108,6 +128,7 @@ int main ( int argc, const char * argv[] ) {
 	}
 	getcwd(cwd, sizeof(cwd));
 	printf("Working dir: %s\n", cwd);
+
 	// two-pass algorithm:
 	MMDoForAllFilesIn ( ".", get_globals_in_file );
 	MMDoForAllFilesIn ( ".", process_file );
@@ -120,8 +141,8 @@ int main ( int argc, const char * argv[] ) {
 	printf ( "%d Skipped files\n", g_count.skip );
 
 	//if ( known_ident("cPage") ) printf ("known cPage\n" );
-	save_data ( g_funcs, idx_f, "functions.txt" );
-	save_data ( g_idents, idx_i, "identifiers.txt" );
+	if ( g_pref.data ) save_data ( g_funcs, idx_f, "functions.txt" );
+	if ( g_pref.data ) save_data ( g_idents, idx_i, "identifiers.txt" );
 
 	return result;
 }
@@ -129,7 +150,7 @@ int main ( int argc, const char * argv[] ) {
 void save_data ( char **list, int count, char *filename )
 {
 	int idx = 0;
-	char path[1025], cmd[1024];
+	char path[1025];
 	sprintf ( path, "./%s", filename );
 	FILE *fd = fopen ( path, "w" );
 	if ( fd ) {
@@ -137,8 +158,6 @@ void save_data ( char **list, int count, char *filename )
 			fprintf ( fd, "%s\n", list[idx] );
 		}
 		fclose ( fd );
-		//sprintf ( cmd, "sort %s > %s.tmp; mv %s.tmp %s", path, path, path, path );
-		//system ( cmd );
 	} else {
 		fprintf ( stderr, "Can't open %s", path );
 	}
@@ -297,15 +316,15 @@ short check_alpha ( int idx_tok, char ch, char last, short in_str, short in_js, 
 	return alpha;
 }
 
-int find_functions_and_globals ( const char *infile, FILE *fd_in )
+int find_functions ( const char *infile, FILE *fd_in )
 {
 	int result = 0;
 	char ch = '\0', last = '\0';
-	char token[1024], line[1024];
+	char token[1024], line[MAX_LINE];
 	int count_ch=0, count_lines=1, count_com=0;
 	int func_idx=0;
 	int idx=0, cdx=0, lineCount = 1;
-    short verbose = g_verbose;
+    short verbose = g_pref.verbose;
 	short in_js=0, in_php=0, in_com=0, in_str=0, in_style=0;
 	short ctype=0, stype=0, ftoke=0, slash=0, saw_dot=0;
 
@@ -317,9 +336,6 @@ int find_functions_and_globals ( const char *infile, FILE *fd_in )
 		} else {
 			short bp = 1;
 		}
-		/* if ( !strcmp(infile,"./js/youtube.js") && ((lineCount == 88 || lineCount == 90) && ch == '(') ) {
-			debug if ( ftoke ) { char *last = g_funcs[idx_f-1]; short bp = 1; }
-		} */
 		cdx++;
 		switch ( ch ) {
 			case '\r': case '\n': 										count_lines++; cdx = 0; break;
@@ -328,32 +344,20 @@ int find_functions_and_globals ( const char *infile, FILE *fd_in )
 				if ( idx == 0 ) ftoke = 0;
 				break;
 		}
-		if ( !in_php ) {
-			if ( !strncmp(token, "<?php", 5) ) {
-				in_php = 1;
-			}
-		} else {
-			if ( !strncmp(token, "?>", 2) ) {
-				in_php = 0;
-			}
-		}
 		if ( !in_js ) {
-			if ( !strncmp(token, "<script", 7) ) {
-				in_js = 1;
-			}
+			if ( !strncmp(token, "<script", 7) ) { in_js = 1; }
 		} else {
-			if ( !strncmp(token, "</script", 8) ) {
-				in_js = 0;
-			}
+			if ( !strncmp(token, "</script", 8) ) { in_js = 0; }
+		}
+		if ( !in_php ) {
+			if ( !strncmp(token, "<?php", 5) ) { in_php = 1; }
+		} else {
+			if ( !strncmp(token, "?>", 2) ) { in_php = 0; }
 		}
 		if ( !in_style ) {
-			if ( !strncmp(token, "<style", 6) ) {
-				in_style = 1;
-			}
+			if ( !strncmp(token, "<style", 6) ) { in_style = 1; }
 		} else {
-			if ( !strncmp(token, "</style>", 7) ) {
-				in_style = 0;
-			}
+			if ( !strncmp(token, "</style>", 7) ) { in_style = 0; }
 		}
 		if ( in_js ) {
 			if ( in_com ) {
@@ -363,12 +367,12 @@ int find_functions_and_globals ( const char *infile, FILE *fd_in )
 				if ( ch == '/' ) {
 					if ( slash ) {
 						in_com = 1; ctype = 1; count_com = 0;
-						//if ( prefs.commentPlan < 2 ) printf ( "/%c", ch );
+						//if ( g_pref.commentPlan < 2 ) printf ( "/%c", ch );
 						slash = 0;
 					} else { slash = 1; }
 				} else if ( ch == '*' && slash ) {
 					in_com = 1; ctype = 2; count_com = 0;
-					//if ( prefs.commentPlan < 2 ) printf ( "/%c", ch );
+					//if ( g_pref.commentPlan < 2 ) printf ( "/%c", ch );
 					slash = 0;
 				} else { slash = 0; }
 			}
@@ -383,17 +387,17 @@ int find_functions_and_globals ( const char *infile, FILE *fd_in )
 			}
 			if ( in_com || in_str ) {
 				last = ch;
-				if ( in_com && prefs.commentPlan > 0 ) count_com++;
+				if ( in_com && g_pref.commentPlan > 0 ) count_com++;
 				continue;
 			}
 			if ( end_com || end_str ) {
 				last = ch;
 				if ( end_com ) {
-					if ( prefs.commentPlan == 1 ) {
+					if ( g_pref.commentPlan == 1 ) {
 						//printf ( " %d elided", count_com );
 						//if ( ctype == 2 ) printf ( " *" );
 					}
-					if ( prefs.commentPlan < 2 ) {
+					if ( g_pref.commentPlan < 2 ) {
 						//printf ( "%c", ch );
 					}
 				}
@@ -431,24 +435,24 @@ int find_functions_and_globals ( const char *infile, FILE *fd_in )
 	return result;
 }
 
+#if 0
 int process_js ( const char *infile, FILE *fd_in, FILE *fd_out )
 {
 	int result = 0;
 	int count_ch=0, count_lines=1, count_com=0;
 	char ch = '\0', last = '\0';
-	char token[1024], line[1024];
+	char token[1024], line[MAX_LINE];
 	int func_idx=0, ident_idx=0;
 	int idx=0, cdx=0;
-	short verbose=g_verbose;
+	short verbose=g_pref.verbose;
 	short in_js = 1, in_com=0, in_str=0, in_jvar=0;
 	short ctype=0, stype=0, ftoke=0, slash=0, saw_dot=0, suppress=0;
-	short trigger = 0;
-	//short idb=0, cdb=0;		// debug flags
+	short debug = 0;
 
 	token[0] = '\0';
 
 	if ( strstr(infile, "lists.js") ) {
-		trigger = 1;
+		debug = 1;
 	}
 	while ( (ch = fgetc(fd_in)) != EOF ) {
 		short alpha = 0, end_com = 0, end_str = 0, end_jvar = 0;
@@ -458,17 +462,11 @@ int process_js ( const char *infile, FILE *fd_in, FILE *fd_out )
 		} else {
 			short bp = 1;
 		}
-		if ( cdx == 0 && !in_com && prefs.lineNums ) { fprintf ( fd_out, "%03d: ", count_lines ); }
+		if ( cdx == 0 && !in_com && g_pref.lineNums ) { fprintf ( fd_out, "%03d: ", count_lines ); }
 		cdx++;
 		switch ( ch ) {
 			case '\r': case '\n':
 				count_lines++; cdx = 0;
-				/*
-				if ( in_str && stype == 1 ) {
-					short bp = 1;
-					trigger = 1;
-				}
-				*/
 				if ( stype != 1 ) { in_str = 0; stype = 0; }	// line end terminates string(?)
 				in_jvar = 0;
 				break;
@@ -485,13 +483,13 @@ int process_js ( const char *infile, FILE *fd_in, FILE *fd_out )
 				if ( ch == '/' ) {
 					if ( slash ) {
 						in_com = 1; ctype = 1; count_com = 0;
-						if ( prefs.commentPlan < 2 ) fprintf ( fd_out, "%c", ch );		// out
+						if ( g_pref.commentPlan < 2 ) fprintf ( fd_out, "%c", ch );		// out
 						slash = 0;
 						suppress = 1;
 					} else { slash = 1; }
 				} else if ( ch == '*' && slash ) {
 					in_com = 1; ctype = 2; count_com = 0;
-					if ( prefs.commentPlan < 2 ) fprintf ( fd_out, "%c", ch );			// out
+					if ( g_pref.commentPlan < 2 ) fprintf ( fd_out, "%c", ch );			// out
 					slash = 0; // suppress = 1;
 				} else { slash = 0; }
 			}
@@ -505,24 +503,17 @@ int process_js ( const char *infile, FILE *fd_in, FILE *fd_out )
 				if ( ch == '`' && stype == 3 && last != '\\' ) { in_str = 0; end_str = 1; } 	// end `
 			}
 			if ( !in_jvar ) {
-				if ( last == '$' && ch == '{' ) {
-					if ( trigger ) {
-						char *l = line;
-						int c = count_lines;
-					}
-					in_jvar = 1; } 	// ${
+				if ( last == '$' && ch == '{' ) { in_jvar = 1; } 	// ${
 			} else {
-				if ( ch == '}' ) {
-					char *l = line;
-					end_jvar = 1; } 						// ${
+				if ( ch == '}' ) { end_jvar = 1; } 						// ${
 			}
 			if ( in_com ) {
-				if ( prefs.commentPlan > 0 ) {
+				if ( g_pref.commentPlan > 0 ) {
 					count_com++; suppress = 0;
 					last = ch;
 					continue;
 				}
-				if ( prefs.commentPlan < 2 )	fprintf ( fd_out, "%c", ch );
+				if ( g_pref.commentPlan < 2 )	fprintf ( fd_out, "%c", ch );
 			}
 			if ( in_str ) {
 				if ( stype != 3 || !in_jvar ) {
@@ -535,11 +526,11 @@ int process_js ( const char *infile, FILE *fd_in, FILE *fd_out )
 			}
 			if ( end_com ) {
 				last = ch;
-				if ( prefs.commentPlan == 1 ) {
+				if ( g_pref.commentPlan == 1 ) {
 					fprintf ( fd_out, " %d elided", count_com );
 					if ( ctype == 2 ) fprintf ( fd_out, " *" );
 				}
-				if ( prefs.commentPlan < 2 ) fprintf ( fd_out, "%c", ch );
+				if ( g_pref.commentPlan < 2 ) fprintf ( fd_out, "%c", ch );
 				continue;
 			}
 			if ( end_str ) {
@@ -587,9 +578,6 @@ int process_js ( const char *infile, FILE *fd_in, FILE *fd_out )
 						} else if ( !valid ) {		// don't rewrite this identifier
 							fprintf ( fd_out, "%s", token );
 						} else {
-							if ( !isalpha(token[0]) ) {
-								short bp = 1;
-							}
 							ident_idx = register_ident ( token );
 							fprintf ( fd_out, "%s_i%d", token, ident_idx );
 						}
@@ -607,7 +595,7 @@ int process_js ( const char *infile, FILE *fd_in, FILE *fd_out )
 			if ( !suppress ) fprintf ( fd_out, "%c", ch );
 		} else {
 			if ( slash ) {
-				if ( !suppress && !in_com && prefs.commentPlan < 2 ) fprintf ( fd_out, "/" );
+				if ( !suppress && !in_com && g_pref.commentPlan < 2 ) fprintf ( fd_out, "/" );
 				slash = 0;
 			}
 		}
@@ -617,46 +605,66 @@ int process_js ( const char *infile, FILE *fd_in, FILE *fd_out )
 
 	return result;
 }
+#endif
+
+short regex ( char *token )
+{
+	short is_regex = 0;
+	if ( !strncmp(token, "match", 5) ) is_regex = 1;
+	if ( !strncmp(token, "replace", 7) ) is_regex = 1;
+	return is_regex;
+}
 
 int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 {
 	int result = 0;
 	int count_ch=0, count_lines=1, count_com=0;
 	char ch = '\0', last = '\0';
-	char token[1024], line[1024];
+	char token[MAX_LINE], line[MAX_LINE], string[MAX_LINE];
 	int func_idx=0, ident_idx=0;
-	int idx=0, cdx=0;
+	int idx=0, cdx=0, sdx=0;
 	short in_js=0, in_php=0, in_com=0, in_str=0, in_jvar=0, in_style=0;
 	short ctype=0, stype=0, ftoke=0, slash=0, saw_dot=0, suppress=0;
-	short trigger = 0;
+	short debug = 0;
 	//short idb=0, cdb=0;		// debug flags
 
 	token[0] = '\0';
-	if ( strstr(infile, "learn/BAK/index") ) {
-		trigger = 1;
+	if ( strstr(infile, "setup") ) {	// debug hook for specific file
+		debug = 1;
 	}
+	char *ext = MMFileExtension ( infile );
+	if ( !strcmp(ext, "js") ) in_js = 1;
+
 	while ( (ch = fgetc(fd_in)) != EOF ) {
 		short alpha = 0, end_com = 0, end_str = 0, end_jvar = 0;
 		count_ch++;
-		if ( cdx <= 1022 ) {
+		if ( cdx <= MAX_LINE - 2 ) {
 			line[cdx] = ch; line[cdx+1] = '\0';
 		} else {
+			if ( g_pref.warn ) fprintf ( stderr, "WARNING: line %d longer than %d chars\n", count_lines, MAX_LINE );
 			short bp = 1;
 		}
-		if ( cdx == 0 && !in_com && prefs.lineNums ) { fprintf ( fd_out, "%03d: ", count_lines ); }
+		if ( debug > 0 ) {
+			char *l = line;
+			if ( strstr(token, "replace") ) {
+				debug++;
+			}
+			if ( debug > 1 && in_str > 0 ) {
+				short bp = 1;
+			}
+		}
+		if ( cdx == 0 && !in_com && g_pref.lineNums ) { fprintf ( fd_out, "%03d: ", count_lines ); }
 		cdx++;
 		switch ( ch ) {
 			case '\r': case '\n':
 				count_lines++; cdx = 0;
-				in_str = 0; in_jvar = 0; stype = 0;
+				if ( stype != 1 ) { in_str = 0; stype = 0; }	// line end terminates string(?)
+				in_jvar = 0;
 				break;
 			case '{': case '}': case '(': case ')': case '[': case ']':
 			case ';': case ':':
 				if ( idx == 0 ) ftoke = 0;
 				break;
-		}
-		if ( strstr(infile,"setup") && count_lines > 426 ) {
-			short bp = 1;
 		}
 		if ( !in_php ) {
 			if ( !strncmp(token, "<?php", 5) ) 	in_php = 1;
@@ -676,29 +684,51 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 		if ( in_js ) {
 			if ( in_com ) {
 				if ( ch == '/' && last == '*' && ctype == 2 ) { in_com = 0; end_com = 1; } /* end */
-				if ( ch == '\n' && ctype == 1 ) { in_com = 0; end_com = 1; } // end
-			} else if ( !in_str ) {							// ignore slashes inside string bodies
+				if ( ch == '\n' && ctype == 1 ) { in_com = 0; end_com = 1; } 			   // end
+			} else if ( !in_str ) { // ignore slashes inside string bodies
 				if ( ch == '/' && last != '<' ) {
 					if ( slash ) {
 						in_com = 1; ctype = 1; count_com = 0;
-						if ( prefs.commentPlan < 2 ) fprintf ( fd_out, "%c", ch );		// out
+						if ( g_pref.commentPlan < 2 ) fprintf ( fd_out, "%c", ch );		// out
 						slash = 0;
 						suppress = 1;
 					} else { slash = 1; }
 				} else if ( ch == '*' && slash ) {
 					in_com = 1; ctype = 2; count_com = 0;
-					if ( prefs.commentPlan < 2 ) fprintf ( fd_out, "%c", ch );			// out
+					if ( g_pref.commentPlan < 2 ) fprintf ( fd_out, "%c", ch );			// out
 					slash = 0; // suppress = 1;
 				} else { slash = 0; }
 			}
 			if ( !in_str ) {
+				/*
+				if ( debug > 1 && ch == '"' ) {
+					short bp = 1; char *l = line;
+				}
+				if ( ch == '"' && !in_com  ) {	// make sure double quote is not inside a regex
+					if ( last != '\\' && last != '\'' ) {
+						in_str = 1; stype = 1;	 												// begin "
+					}
+				}
+				if ( ch == '\'' && !in_com  ) {	// make sure double quote is not inside a regex
+					if ( last != '\\' && last != '\'' ) {
+						in_str = 1; stype = 2;	 												// begin "
+					}
+				}
+				*/
 				if ( ch == '"' && !in_com ) { in_str = 1; stype = 1; } 							// begin "
 				if ( ch == '\'' && !in_com ) { in_str = 1; stype = 2; } 						// begin '
 				if ( ch == '`' && !in_com ) { in_str = 1; stype = 3; }  						// begin `
+				if ( ch == '/' && regex(token) ) { in_str = 1; stype = 4; }						// begin /regex/
 			} else {
 				if ( ch == '"' && stype == 1 && last != '\\' ) { in_str = 0; end_str = 1; } 	// end "
 				if ( ch == '\'' && stype == 2 && last != '\\' ) { in_str = 0; end_str = 1; }	// end '
 				if ( ch == '`' && stype == 3 && last != '\\' ) { in_str = 0; end_str = 1; } 	// end `
+				if ( ch == '/' && stype == 4 && last != '\\' ) { in_str = 0; end_str = 1; } 	// end /regex/
+				if ( !end_str ) {
+					if ( sdx <= MAX_LINE - 2 ) {
+						string[sdx] = ch; string[sdx+1] = '\0';
+					}
+				}
 			}
 			if ( !in_jvar ) {
 				if ( last == '$' && ch == '{' ) { in_jvar = 1; } 	// ${
@@ -706,12 +736,12 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 				if ( ch == '}' ) { end_jvar = 1; } 					// ${
 			}
 			if ( in_com ) {
-				if ( prefs.commentPlan > 0 ) {
+				if ( g_pref.commentPlan > 0 ) {
 					count_com++; suppress = 0;
 					last = ch;
 					continue;
 				}
-				if ( prefs.commentPlan < 2 )	fprintf ( fd_out, "%c", ch );
+				if ( g_pref.commentPlan < 2 )	fprintf ( fd_out, "%c", ch );
 			}
 			if ( in_str ) {
 				if ( stype != 3 || !in_jvar ) {
@@ -724,11 +754,11 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 			}
 			if ( end_com ) {
 				last = ch;
-				if ( prefs.commentPlan == 1 ) {
+				if ( g_pref.commentPlan == 1 ) {
 					fprintf ( fd_out, " %d elided", count_com );
 					if ( ctype == 2 ) fprintf ( fd_out, " *" );
 				}
-				if ( prefs.commentPlan < 2 ) fprintf ( fd_out, "%c", ch );
+				if ( g_pref.commentPlan < 2 ) fprintf ( fd_out, "%c", ch );
 				continue;
 			}
 			if ( end_str ) {
@@ -760,13 +790,18 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 					}
 				} else {
 					if ( strlen(token) > 0 ) {
+						char min[128];
+						if ( g_pref.tight ) {
+							sprintf ( min, "%c", token[0] );
+						} else {
+							strcpy ( min, token );
+						}
 						if ( ftoke ) {
-							//strcpy ( func, token );		// is a function name
 							func_idx = register_func ( token );
-							//fprintf ( fd_out, "%s[f%d]", token, func_idx );
-							fprintf ( fd_out, "%s_f%d", token, func_idx );
+							fprintf ( fd_out, "%s_f%d", min, func_idx );
 						} else {
 							short rewriteIdent = 1;
+							short valid = valid_ident ( token );
 							func_idx = known_func ( token );
 							if ( in_php ) {
 								if ( token[0] == '$' ) {	// turn off identifier rewrite in PHP vars
@@ -774,10 +809,10 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 								}
 							}
 							if ( func_idx >= 0 ) {
-								fprintf ( fd_out, "%s_f%d", token, func_idx );
+								fprintf ( fd_out, "%s_f%d", min, func_idx );
 							} else if ( rewriteIdent ) {
 								ident_idx = register_ident ( token );
-								fprintf ( fd_out, "%s_i%d", token, ident_idx );
+								fprintf ( fd_out, "%s_i%d", min, ident_idx );
 							} else {
 								fprintf ( fd_out, "%s", token );
 							}
@@ -802,7 +837,7 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 			if ( !suppress ) fprintf ( fd_out, "%c", ch );
 		} else {
 			if ( slash ) {
-				if ( !suppress && !in_com && prefs.commentPlan < 2 ) fprintf ( fd_out, "/" );
+				if ( !suppress && !in_com && g_pref.commentPlan < 2 ) fprintf ( fd_out, "/" );
 				slash = 0;
 			}
 		}
@@ -879,7 +914,7 @@ int MMMakeDir ( char *path, mode_t mode )
 	struct stat statbuff;
 	char buffer[4096];
 	char *partial = NULL, *end = NULL;
-	short last = 0, verbose = g_verbose;
+	short last = 0, verbose = g_pref.verbose;
 
 	if ( !path) return -1;
 	strcpy ( buffer, path );
@@ -920,7 +955,7 @@ short MMCopyFile ( const char *source, const char *dest )
 	int result = stat ( source, &file_stat );
 
 	if ( result == 0 ) {
-		char cmd[1024];
+		char cmd[MAX_LINE];
 		sprintf ( cmd, "cp -p '%s' '%s'", source, dest );
 		result = system ( cmd );
 		if ( result ) {
@@ -1050,7 +1085,7 @@ int get_globals_in_file ( const char *fpath, const struct stat *sb, int tflag, s
     #pragma unused ( sb )
 	FILE *fd_in = NULL, *fd_out = NULL;
 	char *infile = NULL, *bakfile = NULL, *ext = NULL;
-	short verbose = g_verbose;
+	short verbose = g_pref.verbose;
 
 	if ( tflag == DIRECTORY )  return 0;
 
@@ -1079,7 +1114,7 @@ int get_globals_in_file ( const char *fpath, const struct stat *sb, int tflag, s
 	fd_in = fopen ( infile, "r" );
 	if ( !fd_in ) { printf ( "Cannot read %s\n", infile ); return -1; }
 
-	find_functions_and_globals ( infile, fd_in );
+	find_functions ( infile, fd_in );
 
 	if ( fd_in  && fd_in  != stdin )  fclose ( fd_in );
 
@@ -1095,7 +1130,7 @@ int process_file ( const char *fpath, const struct stat *sb, int tflag, struct F
 	char *infile = NULL, *outfile = NULL, *bakfile = NULL;
 	char *ext = NULL;
 	int len = 0;
-	short verbose = g_verbose, use_stdout = 0;
+	short verbose = g_pref.verbose, use_stdout = 0;
 
 	if ( tflag == DIRECTORY )  return 0;
 
@@ -1134,7 +1169,7 @@ int process_file ( const char *fpath, const struct stat *sb, int tflag, struct F
 	}
 	if ( !strcmp(ext,"js") ) {
 		if ( verbose ) printf ( "JS FILE: %s\n", infile );
-		process_js ( infile, fd_in, fd_out );
+		process_html ( infile, fd_in, fd_out );
 		g_count.js++;
 	}
 	if ( fd_in  && fd_in  != stdin )  fclose ( fd_in );
