@@ -77,9 +77,13 @@ char *gReserved[] = {
 	"isNaN", "Object", "Date", "Math", "atob", "btoa", "parseInt", "parseFloat", "encodeURI", "JSON",
 	"window", "document", "self", "this", "success", "error", "console",
 	"typeof", "undefined", "null", "NULL",
+	"setTimeout", "clearTimeout",
 	"<", "script", "/script", "<script", "<script>", "</script>", "type", "src", "ref",
 	"<?php", "?>", "empty", "foreach", "echo", "include", "PARAM",
 	"\n", "n", ";\n", "g", "nvar", "Location", "http", "https",
+	"google", "center", "zoom", "disableDefaultUI", "mapTypeId", "AdvancedMarkerElement",
+	"dataType", "url", "textStatus", "errorThrown", "encodeURIComponent",
+	"jQuery", "$",
 	"cPage",
 	NULL
 };
@@ -672,17 +676,9 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 				if ( ch == '`' && stype == 3 && last != '\\' ) { in_str = 0; end_str = 1; } 	// end `
 			}
 			if ( !in_jvar ) {
-				if ( last == '$' && ch == '{' ) {
-					if ( trigger ) {
-						char *l = line; int c = count_lines;
-					}
-					in_jvar = 1; } 	// ${
+				if ( last == '$' && ch == '{' ) { in_jvar = 1; } 	// ${
 			} else {
-				if ( ch == '}' ) {
-					if ( trigger ) {
-						char *l = line;
-					}
-					end_jvar = 1; } 						// ${
+				if ( ch == '}' ) { end_jvar = 1; } 					// ${
 			}
 			if ( in_com ) {
 				if ( prefs.commentPlan > 0 ) {
