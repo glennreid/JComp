@@ -26,8 +26,21 @@ char *g_idents[MAX_IDENTS];
 int idx_f = 0, idx_i = 0;
 char *g_currfile = NULL;
 
-short commentPlan = 1;		// 0 = keep, 1 = elide, 2 = drop
-short lineNumbers = 0;
+//short commentPlan = 1;		// 0 = keep, 1 = elide, 2 = drop
+//short lineNumbers = 0;
+
+struct _prefs {
+	short lineNums;
+	short commentPlan;
+	short parseTicks;
+} prefs = { 0, 1, 0 };
+
+struct _count {
+	int js;
+	int html;
+	int php;
+	int skip;
+} g_count = { 0, 0, 0, 0 };
 
 #define DIRECTORY FTW_D
 typedef struct FTW *sftwptr;
@@ -62,10 +75,10 @@ char *gReserved[] = {
 	"function", "if", "else", "for", "while", "return", "switch", "case", "break", "continue", "in", "of",
 	"var", "let", "const", "true", "false", "new",
 	"isNaN", "Object", "Date", "Math", "atob", "btoa", "parseInt", "parseFloat", "encodeURI", "JSON",
-	"window", "document", "self", "this",
+	"window", "document", "self", "this", "success", "error", "console",
 	"typeof", "undefined", "null", "NULL",
 	"<", "script", "/script", "<script", "<script>", "</script>", "type", "src", "ref",
-	"<?php", "empty", "foreach", "echo", "include", "PARAM",
+	"<?php", "?>", "empty", "foreach", "echo", "include", "PARAM",
 	"\n", "n", ";\n", "g", "nvar", "Location", "http", "https",
 	"cPage",
 	NULL
@@ -90,11 +103,16 @@ int main ( int argc, const char * argv[] ) {
 	printf("Working dir: %s\n", cwd);
 	// two-pass algorithm:
 	MMDoForAllFilesIn ( ".", get_globals_in_file );
-	printf ( "%d functions\n", idx_f );
 	MMDoForAllFilesIn ( ".", process_file );
-	printf ( "%d identifiers\n", idx_i );
 
-	if ( known_ident("cPage") ) printf ("known cPage\n" );
+	printf ( "%d functions\n", idx_f );
+	printf ( "%d identifiers\n", idx_i );
+	printf ( "%d JS files\n", g_count.js );
+	printf ( "%d HTML files\n", g_count.html );
+	printf ( "%d PHP files\n", g_count.php );
+	printf ( "%d Skipped files\n", g_count.skip );
+
+	//if ( known_ident("cPage") ) printf ("known cPage\n" );
 
 	return result;
 }
@@ -318,37 +336,37 @@ int find_functions_and_globals ( const char *infile, FILE *fd_in )
 				if ( ch == '/' ) {
 					if ( slash ) {
 						in_com = 1; ctype = 1; count_com = 0;
-						//if ( commentPlan < 2 ) printf ( "/%c", ch );
+						//if ( prefs.commentPlan < 2 ) printf ( "/%c", ch );
 						slash = 0;
 					} else { slash = 1; }
 				} else if ( ch == '*' && slash ) {
 					in_com = 1; ctype = 2; count_com = 0;
-					//if ( commentPlan < 2 ) printf ( "/%c", ch );
+					//if ( prefs.commentPlan < 2 ) printf ( "/%c", ch );
 					slash = 0;
 				} else { slash = 0; }
 			}
-			if ( in_str ) {
-				if ( ch == '"' && stype == 1 && last != '\\' ) { in_str = 0; end_str = 1; } // end "
-				if ( ch == '\'' && stype == 2 && last != '\\' ) { in_str = 0; end_str = 1; } // end '
-				if ( ch == '`' && stype == 3 && last != '\\' ) { in_str = 0; end_str = 1; } // end `
-			} else if ( !in_php ) {							// ignore strings inside PHP code
-				if ( ch == '"' && !in_com ) { in_str = 1; stype = 1; } 	// begin "
-				if ( ch == '\'' && !in_com ) { in_str = 1; stype = 2; } // begin '
-				if ( ch == '`' && !in_com ) { in_str = 1; stype = 3; }  // begin `
+			if ( !in_str ) {
+				if ( ch == '"' && !in_com ) { in_str = 1; stype = 1; } 							// begin "
+				if ( ch == '\'' && !in_com ) { in_str = 1; stype = 2; } 						// begin '
+				if ( ch == '`' && !in_com ) { in_str = 1; stype = 3; }  						// begin `
+			} else {
+				if ( ch == '"' && stype == 1 && last != '\\' ) { in_str = 0; end_str = 1; } 	// end "
+				if ( ch == '\'' && stype == 2 && last != '\\' ) { in_str = 0; end_str = 1; }	// end '
+				if ( ch == '`' && stype == 3 && last != '\\' ) { in_str = 0; end_str = 1; } 	// end `
 			}
 			if ( in_com || in_str ) {
 				last = ch;
-				if ( in_com && commentPlan > 0 ) count_com++;
+				if ( in_com && prefs.commentPlan > 0 ) count_com++;
 				continue;
 			}
 			if ( end_com || end_str ) {
 				last = ch;
 				if ( end_com ) {
-					if ( commentPlan == 1 ) {
+					if ( prefs.commentPlan == 1 ) {
 						//printf ( " %d elided", count_com );
 						//if ( ctype == 2 ) printf ( " *" );
 					}
-					if ( commentPlan < 2 ) {
+					if ( prefs.commentPlan < 2 ) {
 						//printf ( "%c", ch );
 					}
 				}
@@ -394,81 +412,114 @@ int process_js ( const char *infile, FILE *fd_in, FILE *fd_out )
 	char token[1024], line[1024];
 	int func_idx=0, ident_idx=0;
 	int idx=0, cdx=0;
-	short verbose=g_verbose, in_com=0, ctype=0, in_str=0, stype=0, ftoke=0, slash=0, saw_dot=0, suppress=0;
+	short verbose=g_verbose;
+	short in_js = 1, in_com=0, in_str=0, in_jvar=0;
+	short ctype=0, stype=0, ftoke=0, slash=0, saw_dot=0, suppress=0;
+	short trigger = 0;
 	//short idb=0, cdb=0;		// debug flags
 
 	token[0] = '\0';
 
+	if ( strstr(infile, "lists.js") ) {
+		trigger = 1;
+	}
 	while ( (ch = fgetc(fd_in)) != EOF ) {
-		short alpha = 0, end_com = 0, end_str = 0;
+		short alpha = 0, end_com = 0, end_str = 0, end_jvar = 0;
 		count_ch++;
 		if ( cdx <= 1022 ) {
 			line[cdx] = ch; line[cdx+1] = '\0';
 		} else {
 			short bp = 1;
 		}
-		if ( cdx == 0 && !in_com && lineNumbers ) { fprintf ( fd_out, "%03d: ", count_lines ); }
+		if ( cdx == 0 && !in_com && prefs.lineNums ) { fprintf ( fd_out, "%03d: ", count_lines ); }
 		cdx++;
 		switch ( ch ) {
-			case '\r': case '\n': 										count_lines++; cdx = 0; break;
+			case '\r': case '\n':
+				count_lines++; cdx = 0;
+				/*
+				if ( in_str && stype == 1 ) {
+					short bp = 1;
+					trigger = 1;
+				}
+				*/
+				if ( stype != 1 ) { in_str = 0; stype = 0; }	// line end terminates string(?)
+				in_jvar = 0;
+				break;
 			case '{': case '}': case '(': case ')': case '[': case ']':
 			case ';': case ':':
 				if ( idx == 0 ) ftoke = 0;
 				break;
 		}
-		if ( in_com ) {
-			if ( ch == '/' && last == '*' && ctype == 2 ) { in_com = 0; end_com = 1; } /* end */
-			if ( ch == '\n' && ctype == 1 ) { in_com = 0; end_com = 1; } // end
-		} else if ( !in_str ) {							// ignore slashes inside string bodies
-			if ( ch == '/' ) {
-				if ( slash ) {
-					in_com = 1; ctype = 1; count_com = 0;
-					if ( commentPlan < 2 ) fprintf ( fd_out, "%c", ch );		// out
-					slash = 0;
-					suppress = 1;
-				} else { slash = 1; }
-			} else if ( ch == '*' && slash ) {
-				in_com = 1; ctype = 2; count_com = 0;
-				if ( commentPlan < 2 ) fprintf ( fd_out, "%c", ch );			// out
-				slash = 0; // suppress = 1;
-			} else { slash = 0; }
-		}
-		if ( in_str ) {
-			if ( ch == '"' && stype == 1 && last != '\\' ) { in_str = 0; end_str = 1; } // end "
-			if ( ch == '\'' && stype == 2 && last != '\\' ) { in_str = 0; end_str = 1; } // end '
-			if ( ch == '`' && stype == 3 && last != '\\' ) { in_str = 0; end_str = 1; } // end `
-		} else {
-			if ( ch == '"' && !in_com ) { in_str = 1; stype = 1; } 	// begin "
-			if ( ch == '\'' && !in_com ) { in_str = 1; stype = 2; } // begin '
-			if ( ch == '`' && !in_com ) { in_str = 1; stype = 3; }  // begin `
-		}
-		if ( in_com || in_str ) {
-			last = ch;
+		if ( in_js ) {
 			if ( in_com ) {
-				if ( commentPlan > 0 ) {
+				if ( ch == '/' && last == '*' && ctype == 2 ) { in_com = 0; end_com = 1; } /* end */
+				if ( ch == '\n' && ctype == 1 ) { in_com = 0; end_com = 1; } // end
+			} else if ( !in_str ) {							// ignore slashes inside string bodies
+				if ( ch == '/' ) {
+					if ( slash ) {
+						in_com = 1; ctype = 1; count_com = 0;
+						if ( prefs.commentPlan < 2 ) fprintf ( fd_out, "%c", ch );		// out
+						slash = 0;
+						suppress = 1;
+					} else { slash = 1; }
+				} else if ( ch == '*' && slash ) {
+					in_com = 1; ctype = 2; count_com = 0;
+					if ( prefs.commentPlan < 2 ) fprintf ( fd_out, "%c", ch );			// out
+					slash = 0; // suppress = 1;
+				} else { slash = 0; }
+			}
+			if ( !in_str ) {
+				if ( ch == '"' && !in_com ) { in_str = 1; stype = 1; } 							// begin "
+				if ( ch == '\'' && !in_com ) { in_str = 1; stype = 2; } 						// begin '
+				if ( ch == '`' && !in_com ) { in_str = 1; stype = 3; }  						// begin `
+			} else {
+				if ( ch == '"' && stype == 1 && last != '\\' ) { in_str = 0; end_str = 1; } 	// end "
+				if ( ch == '\'' && stype == 2 && last != '\\' ) { in_str = 0; end_str = 1; }	// end '
+				if ( ch == '`' && stype == 3 && last != '\\' ) { in_str = 0; end_str = 1; } 	// end `
+			}
+			if ( !in_jvar ) {
+				if ( last == '$' && ch == '{' ) {
+					if ( trigger ) {
+						char *l = line;
+						int c = count_lines;
+					}
+					in_jvar = 1; } 	// ${
+			} else {
+				if ( ch == '}' ) {
+					char *l = line;
+					end_jvar = 1; } 						// ${
+			}
+			if ( in_com ) {
+				if ( prefs.commentPlan > 0 ) {
 					count_com++; suppress = 0;
+					last = ch;
 					continue;
 				}
-				if ( commentPlan < 2 )	fprintf ( fd_out, "%c", ch );
+				if ( prefs.commentPlan < 2 )	fprintf ( fd_out, "%c", ch );
 			}
-			if ( in_str ) fprintf ( fd_out, "%c", ch );
-			continue;
-		}
-		if ( end_com || end_str ) {
-			last = ch;
+			if ( in_str ) {
+				if ( stype != 3 || !in_jvar ) {
+					fprintf ( fd_out, "%c", ch );
+					last = ch;
+					continue;
+				}
+				if ( end_jvar ) in_jvar = 0;
+				// keep going to parse the inside of `${js strings}`;
+			}
 			if ( end_com ) {
-				if ( commentPlan == 1 ) {
+				last = ch;
+				if ( prefs.commentPlan == 1 ) {
 					fprintf ( fd_out, " %d elided", count_com );
 					if ( ctype == 2 ) fprintf ( fd_out, " *" );
 				}
-				if ( commentPlan < 2 ) {
-					fprintf ( fd_out, "%c", ch );
-				}
+				if ( prefs.commentPlan < 2 ) fprintf ( fd_out, "%c", ch );
+				continue;
 			}
 			if ( end_str ) {
 				fprintf ( fd_out, "%c", ch );
+				in_jvar = 0;	// can't be in_jvar if not in_str
+				continue;
 			}
-			continue;
 		}
 		alpha = check_alpha ( idx, ch, last, in_str, 0, 0 );
 		if ( alpha && last == '.' ) {	// special case for things like str.length
@@ -486,7 +537,7 @@ int process_js ( const char *infile, FILE *fd_in, FILE *fd_out )
 					short bp = 1;
 				}
 				//if ( ndx == 309 && dfile ) {	// catch specific token
-				if ( strstr(token, "found") && dfile ) {	// catch specific token
+				if ( strstr(line, "${gUID}") ) {	// catch specific token
 					int bp = count_lines;
 					char *look = line;
 				}
@@ -527,7 +578,7 @@ int process_js ( const char *infile, FILE *fd_in, FILE *fd_out )
 			if ( !suppress ) fprintf ( fd_out, "%c", ch );
 		} else {
 			if ( slash ) {
-				if ( !suppress && !in_com && commentPlan < 2 ) fprintf ( fd_out, "/" );
+				if ( !suppress && !in_com && prefs.commentPlan < 2 ) fprintf ( fd_out, "/" );
 				slash = 0;
 			}
 		}
@@ -546,27 +597,29 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 	char token[1024], line[1024];
 	int func_idx=0, ident_idx=0;
 	int idx=0, cdx=0;
-	short in_js=0, in_php=0, in_com=0, in_str=0, in_style=0;
+	short in_js=0, in_php=0, in_com=0, in_str=0, in_jvar=0, in_style=0;
 	short ctype=0, stype=0, ftoke=0, slash=0, saw_dot=0, suppress=0;
 	short trigger = 0;
 	//short idb=0, cdb=0;		// debug flags
 
 	token[0] = '\0';
-
+	if ( strstr(infile, "learn/BAK/index") ) {
+		trigger = 1;
+	}
 	while ( (ch = fgetc(fd_in)) != EOF ) {
-		short alpha = 0, end_com = 0, end_str = 0;
+		short alpha = 0, end_com = 0, end_str = 0, end_jvar = 0;
 		count_ch++;
 		if ( cdx <= 1022 ) {
 			line[cdx] = ch; line[cdx+1] = '\0';
 		} else {
 			short bp = 1;
 		}
-		if ( cdx == 0 && !in_com && lineNumbers ) { fprintf ( fd_out, "%03d: ", count_lines ); }
+		if ( cdx == 0 && !in_com && prefs.lineNums ) { fprintf ( fd_out, "%03d: ", count_lines ); }
 		cdx++;
 		switch ( ch ) {
 			case '\r': case '\n':
 				count_lines++; cdx = 0;
-				in_str = 0; stype = 0;
+				in_str = 0; in_jvar = 0; stype = 0;
 				break;
 			case '{': case '}': case '(': case ')': case '[': case ']':
 			case ';': case ':':
@@ -577,31 +630,19 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 			short bp = 1;
 		}
 		if ( !in_php ) {
-			if ( !strncmp(token, "<?php", 5) ) {
-				in_php = 1;
-			}
+			if ( !strncmp(token, "<?php", 5) ) 	in_php = 1;
 		} else {
-			if ( !strncmp(token, "?>", 2) ) {
-				in_php = 0;
-			}
+			if ( !strncmp(token, "?>", 2) ) 	in_php = 0;
 		}
 		if ( !in_js ) {
-			if ( !strncmp(token, "<script", 7) ) {
-				in_js = 1;
-			}
+			if ( !strncmp(token, "<script", 7) ) 	in_js = 1;
 		} else {
-			if ( !strncmp(token, "</script", 8) ) {
-				in_js = 0;
-			}
+			if ( !strncmp(token, "</script", 8) ) 	in_js = 0;
 		}
 		if ( !in_style ) {
-			if ( !strncmp(token, "<style", 6) ) {
-				in_style = 1;
-			}
+			if ( !strncmp(token, "<style", 6) ) 	in_style = 1;
 		} else {
-			if ( !strncmp(token, "</style>", 7) ) {
-				in_style = 0;
-			}
+			if ( !strncmp(token, "</style>", 7) ) 	in_style = 0;
 		}
 		if ( in_js ) {
 			if ( in_com ) {
@@ -611,51 +652,67 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 				if ( ch == '/' && last != '<' ) {
 					if ( slash ) {
 						in_com = 1; ctype = 1; count_com = 0;
-						if ( commentPlan < 2 ) fprintf ( fd_out, "%c", ch );		// out
+						if ( prefs.commentPlan < 2 ) fprintf ( fd_out, "%c", ch );		// out
 						slash = 0;
 						suppress = 1;
 					} else { slash = 1; }
 				} else if ( ch == '*' && slash ) {
 					in_com = 1; ctype = 2; count_com = 0;
-					if ( commentPlan < 2 ) fprintf ( fd_out, "%c", ch );			// out
+					if ( prefs.commentPlan < 2 ) fprintf ( fd_out, "%c", ch );			// out
 					slash = 0; // suppress = 1;
 				} else { slash = 0; }
 			}
-			if ( in_str ) {
-				if ( ch == '"' && stype == 1 && last != '\\' ) { in_str = 0; end_str = 1; } // end "
-				if ( ch == '\'' && stype == 2 && last != '\\' ) { in_str = 0; end_str = 1; } // end '
-				if ( ch == '`' && stype == 3 && last != '\\' ) { in_str = 0; end_str = 1; } // end `
+			if ( !in_str ) {
+				if ( ch == '"' && !in_com ) { in_str = 1; stype = 1; } 							// begin "
+				if ( ch == '\'' && !in_com ) { in_str = 1; stype = 2; } 						// begin '
+				if ( ch == '`' && !in_com ) { in_str = 1; stype = 3; }  						// begin `
 			} else {
-				if ( ch == '"' && !in_com ) { in_str = 1; stype = 1; } 	// begin "
-				if ( ch == '\'' && !in_com ) { in_str = 1; stype = 2; } // begin '
-				if ( ch == '`' && !in_com ) { in_str = 1; stype = 3; }  // begin `
+				if ( ch == '"' && stype == 1 && last != '\\' ) { in_str = 0; end_str = 1; } 	// end "
+				if ( ch == '\'' && stype == 2 && last != '\\' ) { in_str = 0; end_str = 1; }	// end '
+				if ( ch == '`' && stype == 3 && last != '\\' ) { in_str = 0; end_str = 1; } 	// end `
 			}
-			if ( in_com || in_str ) {
-				last = ch;
-				if ( in_com ) {
-					if ( commentPlan > 0 ) {
-						count_com++; suppress = 0;
-						continue;
+			if ( !in_jvar ) {
+				if ( last == '$' && ch == '{' ) {
+					if ( trigger ) {
+						char *l = line; int c = count_lines;
 					}
-					if ( commentPlan < 2 )	fprintf ( fd_out, "%c", ch );
+					in_jvar = 1; } 	// ${
+			} else {
+				if ( ch == '}' ) {
+					if ( trigger ) {
+						char *l = line;
+					}
+					end_jvar = 1; } 						// ${
+			}
+			if ( in_com ) {
+				if ( prefs.commentPlan > 0 ) {
+					count_com++; suppress = 0;
+					last = ch;
+					continue;
 				}
-				if ( in_str ) fprintf ( fd_out, "%c", ch );
+				if ( prefs.commentPlan < 2 )	fprintf ( fd_out, "%c", ch );
+			}
+			if ( in_str ) {
+				if ( stype != 3 || !in_jvar ) {
+					fprintf ( fd_out, "%c", ch );
+					last = ch;
+					continue;
+				}
+				if ( end_jvar ) in_jvar = 0;
+				// keep going to parse the inside of `${js strings}`;
+			}
+			if ( end_com ) {
+				last = ch;
+				if ( prefs.commentPlan == 1 ) {
+					fprintf ( fd_out, " %d elided", count_com );
+					if ( ctype == 2 ) fprintf ( fd_out, " *" );
+				}
+				if ( prefs.commentPlan < 2 ) fprintf ( fd_out, "%c", ch );
 				continue;
 			}
-			if ( end_com || end_str ) {
+			if ( end_str ) {
 				last = ch;
-				if ( end_com ) {
-					if ( commentPlan == 1 ) {
-						fprintf ( fd_out, " %d elided", count_com );
-						if ( ctype == 2 ) fprintf ( fd_out, " *" );
-					}
-					if ( commentPlan < 2 ) {
-						fprintf ( fd_out, "%c", ch );
-					}
-				}
-				if ( end_str ) {
-					fprintf ( fd_out, "%c", ch );
-				}
+				fprintf ( fd_out, "%c", ch );
 				continue;
 			}
 		}
@@ -668,7 +725,7 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 		} else if ( idx > 0 ) {				// end of token
 			short reserved = 0;
 			token[idx] = '\0';				// null-terminate
-			if ( strstr(infile,"setup") && strstr(token, "replace") ) {		// debug on particular token
+			if ( strstr(token, "gCurrSection") ) {		// debug on particular token
 				char *l = line;
 				short bp = 1;
 			}
@@ -724,7 +781,7 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 			if ( !suppress ) fprintf ( fd_out, "%c", ch );
 		} else {
 			if ( slash ) {
-				if ( !suppress && !in_com && commentPlan < 2 ) fprintf ( fd_out, "/" );
+				if ( !suppress && !in_com && prefs.commentPlan < 2 ) fprintf ( fd_out, "/" );
 				slash = 0;
 			}
 		}
@@ -903,6 +960,7 @@ short good_file ( const char *fpath, struct FTW *ftwbuf )
 	if ( !strcmp(ext,"jpg") ) 							result = EXCLUDE;
 	if ( !strcmp(ext,"png") ) 							result = EXCLUDE;
 	if ( !strcmp(ext,"css") ) 							result = EXCLUDE;
+	if ( !strcmp(ext,"sh") ) 							result = EXCLUDE;
 	if ( strstr(fpath, ".git") )		 				result = EXCLUDE;
 	if ( strstr(fpath, "BAK") ) 						result = EXCLUDE;
 	if ( strstr(fpath, "/img") ) 						result = EXCLUDE;
@@ -1022,22 +1080,11 @@ int process_file ( const char *fpath, const struct stat *sb, int tflag, struct F
 
 	if ( !good_file(fpath, ftwbuf) ) {
 		if ( verbose ) printf ( "EXCLUDE %s\n", fpath );
+		g_count.skip++;
 		return 0;
 	}
 	bakfile = ensure_bakfile ( fpath, ftwbuf );
 	ext = MMFileExtension ( fpath );
-	/*
-	strcpy ( bakfile, fpath );
-	char *dot = ext_pointer ( bakfile );
-	if ( dot ) {
-		*dot = '\0';	// chop extension
-		strcat ( bakfile, ".BAK." );
-		strcat ( bakfile, ext );
-	}
-	if ( !MMFilePathExists(bakfile) ) {
-		MMCopyFile( fpath, bakfile );
-	}
-	*/
 	infile = bakfile;
 	g_currfile = bakfile;
 	outfile = (char *)fpath;
@@ -1057,14 +1104,17 @@ int process_file ( const char *fpath, const struct stat *sb, int tflag, struct F
 	if ( !strcmp(ext,"html") || !strcmp(ext,"shtml") ) {
 		if ( verbose ) printf ( "HTML FILE: %s\n", infile );
 		process_html ( infile, fd_in, fd_out );
+		g_count.html++;
 	}
 	if ( !strcmp(ext,"php") ) {
 		if ( verbose ) printf ( "PHP FILE: %s\n", infile );
 		process_html ( infile, fd_in, fd_out );
+		g_count.php++;
 	}
 	if ( !strcmp(ext,"js") ) {
 		if ( verbose ) printf ( "JS FILE: %s\n", infile );
 		process_js ( infile, fd_in, fd_out );
+		g_count.js++;
 	}
 	if ( fd_in  && fd_in  != stdin )  fclose ( fd_in );
 	if ( fd_out && fd_out != stdout ) fclose ( fd_out );
