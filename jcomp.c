@@ -47,6 +47,7 @@ typedef struct FTW *sftwptr;
 typedef int IterateProcPtr (const char *filename, const struct stat *statptr, int fileflags, struct FTW *pfwt);
 
 // function prototypes
+void save_data ( char **list, int count, char *filename );
 short is_reserved ( char *word );
 int known_func ( char *name );
 int register_func ( char *name );
@@ -73,18 +74,17 @@ char *gAllowFiles[] = {
 };
 char *gReserved[] = {
 	"function", "if", "else", "for", "while", "return", "switch", "case", "break", "continue", "in", "of",
-	"var", "let", "const", "true", "false", "new",
+	"var", "let", "const", "true", "false", "new", "typeof", "undefined", "null", "NULL",
 	"isNaN", "Object", "Date", "Math", "atob", "btoa", "parseInt", "parseFloat", "encodeURI", "JSON",
 	"window", "document", "self", "this", "success", "error", "console",
-	"typeof", "undefined", "null", "NULL",
 	"setTimeout", "clearTimeout",
 	"<", "script", "/script", "<script", "<script>", "</script>", "type", "src", "ref",
 	"<?php", "?>", "empty", "foreach", "echo", "include", "PARAM",
 	"\n", "n", ";\n", "g", "nvar", "Location", "http", "https",
-	"google", "center", "zoom", "disableDefaultUI", "mapTypeId", "AdvancedMarkerElement",
+	"google", "center", "zoom", "disableDefaultUI", "mapTypeId", "AdvancedMarkerElement", "mapInsert",
 	"dataType", "url", "textStatus", "errorThrown", "encodeURIComponent",
 	"jQuery", "$",
-	"cPage",
+	"cPage", "is_mobile",
 	NULL
 };
 char g_verbose = 0;
@@ -117,8 +117,28 @@ int main ( int argc, const char * argv[] ) {
 	printf ( "%d Skipped files\n", g_count.skip );
 
 	//if ( known_ident("cPage") ) printf ("known cPage\n" );
+	save_data ( g_funcs, idx_f, "functions.txt" );
+	save_data ( g_idents, idx_i, "identifiers.txt" );
 
 	return result;
+}
+
+void save_data ( char **list, int count, char *filename )
+{
+	int idx = 0;
+	char path[1025], cmd[1024];
+	sprintf ( path, "./%s", filename );
+	FILE *fd = fopen ( path, "w" );
+	if ( fd ) {
+		for ( idx = 0; idx < idx_f; idx++ ) {
+			fprintf ( fd, "%s\n", list[idx] );
+		}
+		fclose ( fd );
+		//sprintf ( cmd, "sort %s > %s.tmp; mv %s.tmp %s", path, path, path, path );
+		//system ( cmd );
+	} else {
+		fprintf ( stderr, "Can't open %s", path );
+	}
 }
 
 short is_reserved ( char *word )
@@ -555,11 +575,13 @@ int process_js ( const char *infile, FILE *fd_in, FILE *fd_out )
 					if ( ftoke ) {					// is a function name
 						func_idx = register_func ( token );
 						//fprintf ( fd_out, "%s[f%d]", token, func_idx );
-						fprintf ( fd_out, "%s", token );
+						fprintf ( fd_out, "%s_f%d", token, func_idx );
 					} else {						// is an identifier
 						short valid = valid_ident ( token );
 						func_idx = known_func ( token );
-						if ( !valid || func_idx >= 0 ) {		// don't rewrite this identifier
+						if ( func_idx >= 0 ) {		// don't rewrite this identifier
+							fprintf ( fd_out, "%s_f%d", token, func_idx );
+						} else if ( !valid ) {		// don't rewrite this identifier
 							fprintf ( fd_out, "%s", token );
 						} else {
 							if ( !isalpha(token[0]) ) {
@@ -739,18 +761,18 @@ int process_html ( const char *infile, FILE *fd_in, FILE *fd_out )
 							//strcpy ( func, token );		// is a function name
 							func_idx = register_func ( token );
 							//fprintf ( fd_out, "%s[f%d]", token, func_idx );
-							fprintf ( fd_out, "%s", token );
+							fprintf ( fd_out, "%s_f%d", token, func_idx );
 						} else {
 							short rewriteIdent = 1;
+							func_idx = known_func ( token );
 							if ( in_php ) {
 								if ( token[0] == '$' ) {	// turn off identifier rewrite in PHP vars
 									rewriteIdent = 0;
 								}
 							}
-							if ( known_func(token) >= 0 ) {
-								rewriteIdent = 0;
-							}
-							if ( rewriteIdent ) {
+							if ( func_idx >= 0 ) {
+								fprintf ( fd_out, "%s_f%d", token, func_idx );
+							} else if ( rewriteIdent ) {
 								ident_idx = register_ident ( token );
 								fprintf ( fd_out, "%s_i%d", token, ident_idx );
 							} else {
