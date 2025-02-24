@@ -4,6 +4,9 @@
 //
 //  Created by Glenn Reid on 2/21/25.
 //
+//  Compile: gcc -o jcomp jcomp.c'
+//  Usage:   ./jcomp [-v]
+//
 
 #include <stdio.h>
 #include <string.h>
@@ -64,15 +67,15 @@ short good_file ( const char *fpath, struct FTW *ftwbuf );
 int get_globals_in_file ( const char *infile, const struct stat *sb, int tflag, struct FTW *ftwbuf );
 int process_file ( const char *infile, const struct stat *sb, int tflag, struct FTW *ftwbuf );
 
-char *gSkipFiles[] = {
+char *g_skip_files[] = {
 	"jcomp.c", "jquery", "jQueryRotate", "validate.js", "image-resize",
 	NULL
 };
-char *gAllowFiles[] = {
+char *g_allow_files[] = {
 	"main_setup.php",
 	NULL
 };
-char *gReserved[] = {
+char *g_reserved[] = {
 	"function", "if", "else", "for", "while", "return", "switch", "case", "break", "continue", "in", "of",
 	"var", "let", "const", "true", "false", "new", "typeof", "undefined", "null", "NULL",
 	"isNaN", "Object", "Date", "Math", "atob", "btoa", "parseInt", "parseFloat", "encodeURI", "JSON",
@@ -146,7 +149,7 @@ short is_reserved ( char *word )
 	short res = 0;
 	int idx = 0;
 	for ( idx = 0; ; idx++ ) {
-		char *cand = gReserved[idx];
+		char *cand = g_reserved[idx];
 		if ( cand == NULL ) break;
 		if ( !strcmp(word, cand) ) {
 			res = 1; break;
@@ -987,7 +990,7 @@ short good_file ( const char *fpath, struct FTW *ftwbuf )
 
 	// but check for a match list of files to exclude:
 	for ( idx = 0; ; idx++ ) {
-		char *cand = gSkipFiles[idx];
+		char *cand = g_skip_files[idx];
 		if ( cand == NULL ) break;
 		if ( !strncmp(filename, cand, strlen(cand)) ) {
 			result = EXCLUDE; break;
@@ -996,7 +999,7 @@ short good_file ( const char *fpath, struct FTW *ftwbuf )
 	// and a match list of files explicitly to allow
 	if ( !strstr(fpath,"BAK") ) {
 		for ( idx = 0; ; idx++ ) {
-			char *cand = gAllowFiles[idx];
+			char *cand = g_allow_files[idx];
 			if ( cand == NULL ) break;
 			if ( !strncmp(filename, cand, strlen(cand)) ) {
 				result = ALLOW; break;
