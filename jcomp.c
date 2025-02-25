@@ -1099,35 +1099,20 @@ int undo_file ( const char *fpath, const struct stat *sb, int tflag, struct FTW 
 {
     #pragma unused ( sb )
 	char *filename = (char *)fpath + ftwbuf->base;
-	FILE *fd_in = NULL, *fd_out = NULL;
-	char *infile = NULL, *bakfile = NULL, *ext = NULL, *type = NULL;
+	char *bakfile = NULL;
 	char rmpath[1024], restorepath[1024];
 	short verbose = g_pref.verbose;
 	short really = 1;
 
-	if ( !strstr(fpath, "BAK" ) ) {
+	if ( !strstr(fpath, "BAK" ) ) {		// don't touch any file without BAK in the path
 		return 0;
-	}
-
-	type = "UNMATCHED/UNKNOWN type";
-	switch ( tflag ) {
-		case FTW_F: type = "File"; break;
-		case FTW_D: type = "Directory."; break;
-		case FTW_DNR: type = "Directory without read permission."; break;
-		case FTW_DP: type = "Directory with subdirectories visited."; break;
-		case FTW_NS: type = "Unknown type; stat() failed."; break;
-		case FTW_SL: type = "Symbolic link."; break;
-		case FTW_SLN: type = "Sym link that names a nonexistent file."; break;
 	}
 	if ( tflag == FTW_DP ) {
 		if ( EQU(filename, "BAK") ) {
-			printf ( "%s: %d %s\n", fpath, tflag, type );
+			if ( verbose ) printf ( "RMDIR: %s\n", fpath );
 			if ( really ) {
-				strcpy ( rmpath, fpath ); // strcat ( rmpath, "/BAK" );
-				int status = rmdir ( rmpath );
-				if ( status ) {
-					fprintf ( stderr, "Could not rmdir: %s\n", rmpath );
-				}
+				int status = rmdir ( fpath );
+				if ( status ) fprintf ( stderr, "Could not rmdir: %s\n", rmpath );
 			}
 		} else {
 			//printf ( "%s: %d %s\n", fpath, tflag, type );
@@ -1135,33 +1120,24 @@ int undo_file ( const char *fpath, const struct stat *sb, int tflag, struct FTW 
 		return 0;
 	}
 	if ( tflag != FTW_F ) {
-		printf ( "%s: %d %s\n", fpath, tflag, type );
 		return 0;
 	}
-	if ( !good_file(fpath, ftwbuf) ) {
-		//if ( verbose ) printf ( "EXCLUDE %s\n", fpath ); return 0;
-		//return 0;
-	}
-	if ( strlen(filename) < 3 ) {
-		printf ( "SHORT: %s\n", fpath );
-		return 0;
-	}
+	// construct restorepath by removing "/BAK" from the fpath: ./js/BAK/file -> ./js/file
 	strcpy ( restorepath, fpath );
 	char *bak = strstr(restorepath, "BAK" );
-	if ( bak ) {
-		bakfile = fpath;
+	if ( bak ) { // make sure it really has BAK in it (triple-check)
+		bakfile = (char *)fpath;
 		*bak = '\0';	// truncate at the location of /BAK
-		strcat ( restorepath, filename );
+		strcat ( restorepath, filename );	// tack on the filename:
 		if ( MMFilePathExists(bakfile) ) {
 			if ( verbose ) printf ( "MMCopyFile ( %s, %s );\n", bakfile, restorepath );
-			if ( really ) MMCopyFile ( bakfile, restorepath );
+			if ( really )  MMCopyFile ( bakfile, restorepath );
 			if ( verbose ) printf ( "unlink ( %s );\n", bakfile );
-			if ( really ) unlink ( bakfile );
+			if ( really )  unlink ( bakfile );
 		}
 	}
 	return 0;           /* To tell nftw() to continue */
 }
-
 
 void undo_everything ( void )
 {
