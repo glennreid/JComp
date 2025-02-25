@@ -29,6 +29,7 @@
 #define __USE_XOPEN_EXTENDED 1
 #include <ftw.h>
 
+#define DEFAULT_UNDO 0
 #define EXCLUDE 0
 #define ALLOW   1
 #define MAX_FUNCTIONS 1024
@@ -155,7 +156,7 @@ char *g_attributes[] = { // https://www.w3schools.com/TAGs/ref_attributes.asp
 	NULL
 };
 short g_help = 0;
-short g_undo_mode = 0;
+short g_undo_mode = DEFAULT_UNDO;
 
 int main ( int argc, const char * argv[] ) {
 	int result = 0;
@@ -932,7 +933,7 @@ short good_file ( const char *fpath, struct FTW *ftwbuf )
 {
 	char *filename = (char *)fpath + ftwbuf->base;
 	char *ext = NULL;
-	short result = ALLOW;
+	short result = EXCLUDE;
 	int idx = 0;
 
 	if ( strstr(fpath,"php") ) {
@@ -1100,9 +1101,13 @@ int undo_file ( const char *fpath, const struct stat *sb, int tflag, struct FTW 
 	char *filename = (char *)fpath + ftwbuf->base;
 	FILE *fd_in = NULL, *fd_out = NULL;
 	char *infile = NULL, *bakfile = NULL, *ext = NULL, *type = NULL;
-	char rmpath[1024];
+	char rmpath[1024], restorepath[1024];
 	short verbose = g_pref.verbose;
 	short really = 1;
+
+	if ( !strstr(fpath, "BAK" ) ) {
+		return 0;
+	}
 
 	type = "UNMATCHED/UNKNOWN type";
 	switch ( tflag ) {
@@ -1141,16 +1146,18 @@ int undo_file ( const char *fpath, const struct stat *sb, int tflag, struct FTW 
 		printf ( "SHORT: %s\n", fpath );
 		return 0;
 	}
-	bakfile = bakfile_name ( fpath, ftwbuf );
-	if ( strstr(bakfile, "BAK") ) {
+	strcpy ( restorepath, fpath );
+	char *bak = strstr(restorepath, "BAK" );
+	if ( bak ) {
+		bakfile = fpath;
+		*bak = '\0';	// truncate at the location of /BAK
+		strcat ( restorepath, filename );
 		if ( MMFilePathExists(bakfile) ) {
-			if ( verbose ) printf ( "MMCopyFile ( %s, %s );\n", bakfile, fpath );
-			if ( really ) MMCopyFile ( bakfile, fpath );
+			if ( verbose ) printf ( "MMCopyFile ( %s, %s );\n", bakfile, restorepath );
+			if ( really ) MMCopyFile ( bakfile, restorepath );
 			if ( verbose ) printf ( "unlink ( %s );\n", bakfile );
 			if ( really ) unlink ( bakfile );
 		}
-	} else {
-		fprintf ( stderr, "ATTEMPT to restore non BAK file: %s\n", bakfile );
 	}
 	return 0;           /* To tell nftw() to continue */
 }
