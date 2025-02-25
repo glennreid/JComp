@@ -5,17 +5,17 @@
 //  Created by Glenn Reid on 2/21/25.
 //
 //  Compile: gcc -o jcomp jcomp.c'
-//  Usage:   jcomp [-v] [-t]ight [-l]oose [-w]arn [-q]uiet [-d]ata [-c]omments [-n]numerlines [-o]rig
+//  Usage:   jcomp [-v] [-t]ight [-l]oose [-w]arn [-q]uiet [-d]ata [-c]omments [-n]numberlines [-o]rig [-undo]
 //
 //  commentPlans:
 //    jcomp -c 0		// comments are preserved
 //    jcomp -c 1		// comments are elided but visible
 //    jcomp -c 2		// comments are removed
 //  tightness:
-//  jcomp -t 0		// no rewrite at all
-//  jcomp -t 1		// leave original identifiers in generated _i321 idents
-//  jcomp -t 2		// leave first char of original identifier, like m_i321
-//  jcomp -t 3		// absolute minimal identifier, like _321
+//    jcomp -t 0		// no rewrite at all
+//    jcomp -t 1		// leave original identifiers in generated _i321 idents
+//    jcomp -t 2		// leave first char of original identifier, like m_i321
+//    jcomp -t 3		// absolute minimal identifier, like _321
 //
 
 #include <stdio.h>
@@ -89,6 +89,8 @@ char *MMFileExtension ( const char *path );
 short good_file ( const char *fpath, struct FTW *ftwbuf );
 int get_globals_in_file ( const char *infile, const struct stat *sb, int tflag, struct FTW *ftwbuf );
 int process_file ( const char *infile, const struct stat *sb, int tflag, struct FTW *ftwbuf );
+int undo_file ( const char *infile, const struct stat *sb, int tflag, struct FTW *ftwbuf );
+void undo_everything ( void );
 
 #define EQU(X,Y)   !strcmp(X,Y)
 #define LINE(X)    count_lines==X
@@ -152,6 +154,8 @@ char *g_attributes[] = { // https://www.w3schools.com/TAGs/ref_attributes.asp
 	"onvolumechange", "onwaiting", "onwheel",
 	NULL
 };
+short g_help = 0;
+short g_undo_mode = 0;
 
 int main ( int argc, const char * argv[] ) {
 	int result = 0;
@@ -167,8 +171,10 @@ int main ( int argc, const char * argv[] ) {
 		if ( EQU(argv[idx], "-d") ) g_pref.data = 1 - g_pref.data;
 		if ( EQU(argv[idx], "-n") ) g_pref.lineNums = 1 - g_pref.lineNums;
 		if ( EQU(argv[idx], "-o") ) g_pref.origLines = 1 - g_pref.origLines;
+		if ( EQU(argv[idx], "-h") ) g_help = 1;
 		if ( EQU(argv[idx], "-t") ) if ( idx+1 < argc ) { sscanf(argv[idx+1], "%hd", &g_pref.tight); }
 		if ( EQU(argv[idx], "-c") ) if ( idx+1 < argc ) { sscanf(argv[idx+1], "%hd", &g_pref.commentPlan); }
+		if ( EQU(argv[idx], "-undo") ) g_undo_mode = 1;
 	}
 	// figure out where we are
     getcwd(cwd, sizeof(cwd));
@@ -177,6 +183,46 @@ int main ( int argc, const char * argv[] ) {
 	}
 	getcwd(cwd, sizeof(cwd));
 	printf("Working dir: %s\n", cwd);
+
+	if ( g_help ) {
+		printf ( "Usage:   jcomp [-v] [-t]ight [-l]oose [-w]arn [-q]uiet [-d]ata [-c]omments [-n]numberlines [-o]rig [-undo]\n" );
+		printf ( "  commentPlans:\n" );
+		printf ( "    jcomp -c 0		// comments are preserved\n" );
+		printf ( "    jcomp -c 1		// comments are elided but visible\n" );
+		printf ( "    jcomp -c 2		// comments are removed\n" );
+		printf ( "  tightness:\n" );
+		printf ( "    jcomp -t 0		// no rewrite at all\n" );
+		printf ( "    jcomp -t 1		// leave original identifiers in generated _i321 idents\n" );
+		printf ( "    jcomp -t 2		// leave first char of original identifier, like m_i321\n" );
+		printf ( "    jcomp -t 3		// absolute minimal identifier, like _321\n" );
+		exit ( 0 );
+	}
+	if ( g_undo_mode ) {
+		short ask = 1;
+		if ( ask ) {
+			char key = 0, ch = 'Y';
+			printf ( "Really undo the whole directory and files? [Yn]: " );
+			while ( (key = getchar()) ) {
+				short yes = 1;
+				if ( key == '\n' ) {
+					if ( ch == 'N' || ch == 'n' ) {
+						printf ( "STOPPING...\n" );
+						exit(0);
+					}
+					if ( ch == 'Y' || ch == 'y' ) {
+						printf ( "OKAY, let's undo it all.\n" );
+						break;
+					}
+					printf ( "%c - Please respond Y or N: ", ch );
+				} else {
+					ch = key;
+				}
+			}
+		}
+		printf ( "UNDO: here we go...\n" );
+		undo_everything();
+		exit(0);
+    }
 
 	// two-pass algorithm:
 	MMDoForAllFilesIn ( ".", get_globals_in_file );
@@ -936,22 +982,40 @@ short good_file ( const char *fpath, struct FTW *ftwbuf )
 
 static char s_bakfile[1024];
 
-char *ensure_bakfile ( const char *fpath, struct FTW *ftwbuf )
+char *bakfile_dir ( const char *fpath, struct FTW *ftwbuf )
 {
-	char *filename = (char *)fpath + ftwbuf->base;
 	if ( fpath ) {
 		strncpy ( s_bakfile, fpath, ftwbuf->base );
 		s_bakfile[ftwbuf->base] = '\0';
 		strcat ( s_bakfile, "BAK/" );
-		if ( !MMFilePathExists(s_bakfile) ) {
-			MMMakeDir ( s_bakfile, 0755 );
-		}
-		strcat ( s_bakfile, filename );
-		if ( !MMFilePathExists(s_bakfile) ) {
-			MMCopyFile( fpath, s_bakfile );
-		}
 	}
 	return s_bakfile;
+}
+
+char *bakfile_name ( const char *fpath, struct FTW *ftwbuf )
+{
+	char *filename = (char *)fpath + ftwbuf->base;
+	char *dir = bakfile_dir ( fpath, ftwbuf );
+	if ( dir ) {
+		strcat ( dir, filename );
+	}
+	return s_bakfile;
+}
+
+char *ensure_bakfile ( const char *fpath, struct FTW *ftwbuf )
+{
+	char *dir = bakfile_dir ( fpath, ftwbuf );
+	char *filename = NULL;
+	if ( dir ) {
+		if ( !MMFilePathExists(dir) ) {
+			MMMakeDir ( dir, 0755 );
+		}
+		filename = bakfile_name ( fpath, ftwbuf );
+		if ( !MMFilePathExists(filename) ) {
+			MMCopyFile( fpath, filename );
+		}
+	}
+	return filename;
 }
 
 // First-pass function to collect globals. Does not modify anything
@@ -962,11 +1026,10 @@ int get_globals_in_file ( const char *fpath, const struct stat *sb, int tflag, s
 	char *infile = NULL, *bakfile = NULL, *ext = NULL;
 	short verbose = g_pref.verbose;
 
-	if ( tflag == DIRECTORY )  return 0;
+	if ( tflag != FTW_F )  return 0;
 
 	if ( !good_file(fpath, ftwbuf) ) {
-		if ( verbose ) printf ( "EXCLUDE %s\n", fpath );
-		return 0;
+		if ( verbose ) printf ( "EXCLUDE %s\n", fpath ); return 0;
 	}
 	bakfile = ensure_bakfile ( fpath, ftwbuf );
 	ext = MMFileExtension ( fpath );
@@ -995,7 +1058,7 @@ int process_file ( const char *fpath, const struct stat *sb, int tflag, struct F
 	int len = 0;
 	short verbose = g_pref.verbose, use_stdout = 0;
 
-	if ( tflag == DIRECTORY )  return 0;
+	if ( tflag != FTW_F )  return 0;
 
 	if ( !good_file(fpath, ftwbuf) ) {
 		if ( verbose ) printf ( "EXCLUDE %s\n", fpath );
@@ -1029,5 +1092,72 @@ int process_file ( const char *fpath, const struct stat *sb, int tflag, struct F
 	if ( EQU(ext,"js") ) g_count.js++;
 
 	return 0;           /* To tell nftw() to continue */
+}
+
+int undo_file ( const char *fpath, const struct stat *sb, int tflag, struct FTW *ftwbuf )
+{
+    #pragma unused ( sb )
+	char *filename = (char *)fpath + ftwbuf->base;
+	FILE *fd_in = NULL, *fd_out = NULL;
+	char *infile = NULL, *bakfile = NULL, *ext = NULL, *type = NULL;
+	char rmpath[1024];
+	short verbose = g_pref.verbose;
+	short really = 1;
+
+	type = "UNMATCHED/UNKNOWN type";
+	switch ( tflag ) {
+		case FTW_F: type = "File"; break;
+		case FTW_D: type = "Directory."; break;
+		case FTW_DNR: type = "Directory without read permission."; break;
+		case FTW_DP: type = "Directory with subdirectories visited."; break;
+		case FTW_NS: type = "Unknown type; stat() failed."; break;
+		case FTW_SL: type = "Symbolic link."; break;
+		case FTW_SLN: type = "Sym link that names a nonexistent file."; break;
+	}
+	if ( tflag == FTW_DP ) {
+		if ( EQU(filename, "BAK") ) {
+			printf ( "%s: %d %s\n", fpath, tflag, type );
+			if ( really ) {
+				strcpy ( rmpath, fpath ); // strcat ( rmpath, "/BAK" );
+				int status = rmdir ( rmpath );
+				if ( status ) {
+					fprintf ( stderr, "Could not rmdir: %s\n", rmpath );
+				}
+			}
+		} else {
+			//printf ( "%s: %d %s\n", fpath, tflag, type );
+		}
+		return 0;
+	}
+	if ( tflag != FTW_F ) {
+		printf ( "%s: %d %s\n", fpath, tflag, type );
+		return 0;
+	}
+	if ( !good_file(fpath, ftwbuf) ) {
+		//if ( verbose ) printf ( "EXCLUDE %s\n", fpath ); return 0;
+		//return 0;
+	}
+	if ( strlen(filename) < 3 ) {
+		printf ( "SHORT: %s\n", fpath );
+		return 0;
+	}
+	bakfile = bakfile_name ( fpath, ftwbuf );
+	if ( strstr(bakfile, "BAK") ) {
+		if ( MMFilePathExists(bakfile) ) {
+			if ( verbose ) printf ( "MMCopyFile ( %s, %s );\n", bakfile, fpath );
+			if ( really ) MMCopyFile ( bakfile, fpath );
+			if ( verbose ) printf ( "unlink ( %s );\n", bakfile );
+			if ( really ) unlink ( bakfile );
+		}
+	} else {
+		fprintf ( stderr, "ATTEMPT to restore non BAK file: %s\n", bakfile );
+	}
+	return 0;           /* To tell nftw() to continue */
+}
+
+
+void undo_everything ( void )
+{
+	MMDoForAllFilesIn ( ".", undo_file );
 }
 
