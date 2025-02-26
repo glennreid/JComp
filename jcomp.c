@@ -83,6 +83,8 @@ int register_func ( char *name );
 int known_ident ( char *name );
 int register_ident ( char *name );
 int find_functions ( const char *infile, FILE *fd_in );
+void write_token ( FILE *fd_out, char *token );
+void write_char ( FILE *fd_out, char ch );
 int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out );
 unsigned long MMDoForAllFilesIn ( const char *directory, IterateProcPtr apply_proc );
 short MMFilePathExists ( const char *path );
@@ -92,7 +94,6 @@ short good_file ( const char *fpath, struct FTW *ftwbuf );
 int get_globals_in_file ( const char *infile, const struct stat *sb, int tflag, struct FTW *ftwbuf );
 int process_file ( const char *infile, const struct stat *sb, int tflag, struct FTW *ftwbuf );
 int undo_file ( const char *infile, const struct stat *sb, int tflag, struct FTW *ftwbuf );
-void undo_everything ( void );
 
 #define EQU(X,Y)   !strcmp(X,Y)
 #define LINE(X)    line_count==X
@@ -161,8 +162,7 @@ short g_undo_mode = DEFAULT_UNDO;
 short g_conflate_idents = 1;
 
 int main ( int argc, const char * argv[] ) {
-	int result = 0;
-	int idx = 0;
+	int result = 0, idx = 0;
     char cwd[1024];
 
 	// look for command line switches:
@@ -188,7 +188,7 @@ int main ( int argc, const char * argv[] ) {
 	printf("Working dir: %s\n", cwd);
 
 	if ( g_help ) {
-		printf ( "Usage:   jcomp [-v] [-t]ight [-l]oose [-w]arn [-q]uiet [-d]ata [-c]omments [-n]numberlines [-o]rig [-undo]\n" );
+		printf ( "Usage: jcomp [-v] [-t]ight [-l]oose [-w]arn [-q]uiet [-d]ata [-c]omments [-n]numberlines [-o]rig [-undo]\n" );
 		printf ( "  commentPlans:\n" );
 		printf ( "    jcomp -c 0		// comments are preserved\n" );
 		printf ( "    jcomp -c 1		// comments are elided but visible\n" );
@@ -202,33 +202,23 @@ int main ( int argc, const char * argv[] ) {
 	}
 
 	if ( g_undo_mode ) {
-		short ask = 1;
-		if ( ask ) {
+		if ( (1) ) {
 			char key = 0, ch = 'Y';
 			printf ( "Really undo the whole directory and files? [Yn]: " );
 			while ( (key = getchar()) ) {
-				short yes = 1;
 				if ( key == '\n' ) {
-					if ( ch == 'N' || ch == 'n' ) {
-						printf ( "STOPPING...\n" );
-						exit(0);
-					}
-					if ( ch == 'Y' || ch == 'y' ) {
-						printf ( "OKAY, let's undo it all.\n" );
-						break;
-					}
+					if ( ch == 'N' || ch == 'n' ) { printf ( "STOPPING...\n" ); exit(0); }
+					if ( ch == 'Y' || ch == 'y' ) { printf ( "OKAY, let's undo it all.\n" ); break; }
 					printf ( "%c - Please respond Y or N: ", ch );
-				} else {
-					ch = key;
-				}
+				} else { ch = key; }
 			}
 		}
 		printf ( "UNDO: here we go...\n" );
-		undo_everything();
+		MMDoForAllFilesIn ( ".", undo_file );
 		exit(0);
     }
 
-	if ( 1 || g_pref.verbose ) {
+	if ( g_pref.verbose ) {
 		printf ( "Comment Plan: %d\n", g_pref.commentPlan );
 		printf ( "Tightness: %d\n", g_pref.tight );
 	}
@@ -238,14 +228,10 @@ int main ( int argc, const char * argv[] ) {
 
 	// statistics
 	if ( g_pref.warn ) {
-		printf ( "%d functions\n", idx_f );
-		printf ( "%d identifiers\n", idx_i );
-		printf ( "%d JS files\n", g_count.js );
-		printf ( "%d HTML files\n", g_count.html );
-		printf ( "%d PHP files\n", g_count.php );
-		printf ( "%d Skipped files\n", g_count.skip );
+		printf ( "%d functions\n", idx_f ); 		printf ( "%d identifiers\n", idx_i );
+		printf ( "%d JS files\n", g_count.js ); 	printf ( "%d HTML files\n", g_count.html );
+		printf ( "%d PHP files\n", g_count.php ); 	printf ( "%d Skipped files\n", g_count.skip );
 	}
-	//if ( known_ident("cPage") ) printf ("known cPage\n" );
 	if ( g_pref.data ) save_data ( g_funcs, idx_f, "functions.txt" );
 	if ( g_pref.data ) save_data ( g_idents, idx_i, "identifiers.txt" );
 
@@ -275,9 +261,7 @@ short is_reserved ( char *word )
 	for ( idx = 0; ; idx++ ) {
 		char *cand = g_reserved[idx];
 		if ( cand == NULL ) break;
-		if ( EQU(word, cand) ) {
-			res = 1; break;
-		}
+		if ( EQU(word, cand) ) { res = 1; break; }
 	}
 	return res;
 }
@@ -289,16 +273,14 @@ int known_func ( char *name )
 	if ( g_conflate_idents ) return known_ident ( name );
 
 	for ( idx = 0; idx < idx_f; idx++ ) {
-		if ( EQU(g_funcs[idx], name) ) {
-			found = idx; break;
-		}
+		if ( EQU(g_funcs[idx], name) ) { found = idx; break; }
 	}
 	return found;
 }
 
 int register_func ( char *name )
 {
-	int idx = 0, found = known_func ( name );
+	int found = known_func ( name );
 	int len = 0;
 
 	if ( g_conflate_idents ) return register_ident ( name );
@@ -318,8 +300,6 @@ int register_func ( char *name )
 			fprintf ( stderr, "FUNC MALLOC > 100 error\nfile:%s\n%s", g_currfile, name );
 			exit ( -1 );
 		}
-	} else {
-		short bp = 1;
 	}
 	return found;
 }
@@ -331,9 +311,7 @@ int known_ident ( char *name )
 	if ( name ) {
 		len = (int)strlen ( name );
 		for ( idx = 0; idx < idx_i; idx++ ) {
-			if ( EQU(g_idents[idx], name) ) {
-				found = idx; break;
-			}
+			if ( EQU(g_idents[idx], name) ) { found = idx; break; }
 		}
 	}
 	return found;
@@ -341,13 +319,12 @@ int known_ident ( char *name )
 
 int register_ident ( char *name )
 {
-	int idx = 0, found = known_ident ( name );
+	int found = known_ident ( name );
 	int len = 0;
 
 	if ( found == -1 && name) {
 		if ( idx_i >= MAX_IDENTS ) {
-			fprintf ( stderr, "MAX_IDENTS[%d], can't register %s in %s\n", idx_i, name, g_currfile );
-			exit ( -1 );
+			fprintf ( stderr, "MAX_IDENTS[%d], can't register %s in %s\n", idx_i, name, g_currfile ); exit ( -1 );
 		}
 		len = (int)strlen ( name );
 		if ( len < 100 ) {
@@ -356,20 +333,17 @@ int register_ident ( char *name )
 			g_idents[idx_i] = save;
 			found = idx_i++;
 		} else {
-			fprintf ( stderr, "IDENT MALLOC > 100 error\nfile:%s\n%s", g_currfile, name );
-			exit ( -1 );
+			fprintf ( stderr, "IDENT MALLOC > 100 error\nfile:%s\n%s", g_currfile, name ); exit ( -1 );
 		}
 	}
 	return found;
 }
 
-short legal ( char ch )			// other chars allowed in identifiers, like _ and -
+short legal ( char ch )			// other chars allowed in identifiers, like _ and maybe others (NOT "-"!)
 {
 	short okay = 0;
 	switch ( ch ) {
-		case '_':
-			okay = 1; break;
-		default: break;
+		case '_': okay = 1; break;
 	}
 	return okay;
 }
@@ -379,13 +353,12 @@ short valid_ident ( char *token )
 	char first = '\0', second = '\0';
 	short valid = 1;
 	if ( !token ) 							return EXCLUDE;
-	first = token[0];
-	second = token[1];
+	first = token[0]; second = token[1];
 	if ( !isalpha(first) ) 					valid = 0;
 	if ( first == '$' ) 					valid = 1;
 	if ( first == '<' && second == '\0' )	valid = 1;
-	if ( strstr(token, "A-Z") )	// regular expressions pass through
-			valid = 0;
+	if ( strstr(token, "A-Z") ) valid = 0;	// regular expressions pass through
+
 	return valid;
 }
 
@@ -401,24 +374,19 @@ short check_alpha ( int idx_tok, char ch, char last, short in_str, short in_js, 
 {
 	short alpha = 0;
 	if ( idx_tok == 0 ) {
-		if ( isalpha(ch) ) alpha = 1;	// first char must be pure alpha
-		if ( ch == '<' ) // && !in_js )
-			alpha = 1;
-		if ( ch == '$' && in_php ) // php $vars
-			alpha = 1;
+		if ( isalpha(ch) ) alpha = 1;				// first char must be pure alpha
+		if ( ch == '<' ) alpha = 1;
+		if ( ch == '$' && in_php ) alpha = 1;		// php $vars
+
 	} else {
-		if ( ch == '>' )
-			alpha = 1;
-		if ( last == '<' && ch == '/' && in_js )	// </script>
-			alpha = 1;
-		if ( last == '<' && ch == '?' )				// <?php
-			alpha = 1;
-		if ( last == '<' && ch == '!' )				// <!
-			alpha = 1;
-		if ( isalnum(ch) || legal(ch) ) alpha = 1;	// subsequent chars can be alphanumeric
+		if ( ch == '>' ) alpha = 1;
+		if ( last == '<' && ch == '/' && in_js ) alpha = 1;	// </script>
+		if ( last == '<' && ch == '?' ) alpha = 1;			// <?php
+		if ( last == '<' && ch == '!' ) alpha = 1;			// <!
+		if ( isalnum(ch) || legal(ch) ) alpha = 1;			// subsequent chars can be alphanumeric
 	}
 	if ( in_php ) {
-		if ( ch == '?' ) alpha = 1;					// allow for ?> in PHP
+		if ( ch == '?' ) alpha = 1;							// allow for ?> in PHP
 	}
 	return alpha;
 }
@@ -430,9 +398,7 @@ short known_attribute ( char *word )
 	for ( idx = 0; ; idx++ ) {
 		char *cand = g_attributes[idx];
 		if ( cand == NULL ) break;
-		if ( EQU(word, cand) ) {
-			res = 1; break;
-		}
+		if ( EQU(word, cand) ) { res = 1; break; }
 	}
 	return res;
 }
@@ -444,9 +410,7 @@ char is_quote ( char ch )
 	char delims[] = { Q_DUBL, Q_SING, Q_BACK, Q_SLASH, Q_NONE };
 	for ( idx = 0; ; idx++ ) {
 		if ( delims[idx] == Q_NONE ) break;
-		if ( ch == delims[idx] ) {
-			type = ch; break;
-		}
+		if ( ch == delims[idx] ) { type = ch; break; }
 	}
 	return type;
 }
@@ -473,8 +437,7 @@ int find_functions ( const char *infile, FILE *fd_in )
 			case '\r': case '\n': line_count++; cdx = 0; break;
 			case '{': case '}': case '(': case ')': case '[': case ']':
 			case ';': case ':':
-				if ( idx == 0 ) ftoke = 0;
-				break;
+				if ( idx == 0 ) ftoke = 0; break;
 		}
 		if ( !in_js ) {
 			if ( !strncmp(token, "<script", 7) ) { in_js = 1; }
@@ -493,27 +456,25 @@ int find_functions ( const char *infile, FILE *fd_in )
 			} else if ( !in_str ) {							// ignore slashes inside string bodies
 				if ( ch == '/' ) {
 					if ( slash ) {
-						in_com = 1; ctype = C_LINE; count_com = 0;
-						slash = 0;
+						in_com = 1; ctype = C_LINE; count_com = 0; slash = 0;
 					} else { slash = 1; }
 				} else if ( ch == '*' && slash ) {
-					in_com = 1; ctype = C_BLOCK; count_com = 0;
-					slash = 0;
+					in_com = 1; ctype = C_BLOCK; count_com = 0; slash = 0;
 				} else { slash = 0; }
 			}
 			if ( !in_str ) {
-				if ( ch == '"' && !in_com ) { in_str = 1; stype = Q_DUBL; } 							// begin "
+				if ( ch == '"' && !in_com ) { in_str = 1; stype = Q_DUBL; } 						// begin "
 				if ( ch == '\'' && !in_com ) { in_str = 1; stype = Q_SING; } 						// begin '
 				if ( ch == '`' && !in_com ) { in_str = 1; stype = Q_BACK; }  						// begin `
 			} else {
-				if ( ch == '"' && stype == Q_DUBL && last != '\\' ) { in_str = 0; end_str = 1; } 		// end "
-				if ( ch == '\'' && stype == Q_SING && last != '\\' ) { in_str = 0; end_str = 1; }		// end '
+				if ( ch == '"' && stype == Q_DUBL && last != '\\' ) { in_str = 0; end_str = 1; } 	// end "
+				if ( ch == '\'' && stype == Q_SING && last != '\\' ) { in_str = 0; end_str = 1; }	// end '
 				if ( ch == '`' && stype == Q_BACK && last != '\\' ) { in_str = 0; end_str = 1; } 	// end `
 			}
 			if ( in_com || in_str ) {
 				last = ch;
 				if ( in_com && g_pref.commentPlan > 0 ) count_com++;
-				continue;
+				continue;		// <-----------------------------
 			}
 			if ( end_com || end_str ) {
 				last = ch;
@@ -565,11 +526,18 @@ void write_ident ( short type, FILE *fd_out, int f_idx, char *token )
 	if ( g_pref.tight == T_MIN || g_conflate_idents ) strcpy ( prefix, "" );
 
 	if ( g_pref.tight ) {
-		if ( f_idx >= 0 ) {
-			sprintf ( ident, "%s_%s%d", min, prefix, f_idx );
-		}
+		if ( f_idx >= 0 ) { sprintf ( ident, "%s_%s%d", min, prefix, f_idx ); }
 	}
 	fprintf ( fd_out, "%s", ident );
+}
+
+void write_token ( FILE *fd_out, char *token )
+{
+	fprintf ( fd_out, "%s", token );
+}
+void write_char ( FILE *fd_out, char ch )
+{
+	fprintf ( fd_out, "%c", ch );
 }
 
 int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
@@ -600,13 +568,12 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 		}
 		if ( cdx == 0 && g_pref.lineNums ) {
 			if ( !in_com || g_pref.commentPlan == 0 ) {
-				fprintf ( fd_out, "%03d: ", line_count );
+				fprintf ( fd_out, "%03d: ", line_count );	// line numbering
 			}
 		}
 		cdx++;
-		if ( strstr(infile, "server") ) {	// debug hook for specific file
-			if ( line_count >= 691 )
-				debug = 1;
+		if ( FLINE(691, "server") ) {	// debug hook for specific file
+			debug = 1;
 		}
 		switch ( ch ) {
 			case '\r': case '\n':
@@ -636,31 +603,31 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 			if ( ch == '/'  && last != '<' ) {
 				if ( slash ) {
 					in_com = nest++; ctype = C_LINE; count_com = 0;
-					if ( !in_php && g_pref.commentPlan < 2 ) fprintf ( fd_out, "%c", ch );		// out
+					if ( !in_php && g_pref.commentPlan < 2 ) write_char ( fd_out, ch );		// out
 					if ( !in_php ) suppress = 1;
 					slash = 0;
 				} else { slash = 1; }
 			} else if ( ch == '*' && slash ) {
 				in_com = nest++; ctype = C_BLOCK; count_com = 0;
-				if ( !in_php && g_pref.commentPlan == 1 ) fprintf ( fd_out, "%c", ch );			// out
+				if ( !in_php && g_pref.commentPlan == 1 ) write_char ( fd_out, ch );			// out
 				slash = 0;
 			} else { slash = 0; }
 		}
 		if ( !in_com && !end_com ) {
 			if ( !in_php ) {
-				if ( !strncmp(token, "<?php", 5) ) 		in_php = nest++;
+				if ( !strncmp(token, "<?php",5) ) 		in_php = nest++;
 			} else {
-				if ( !strncmp(token, "?>", 2) ) 		in_php = 0;
+				if ( !strncmp(token, "?>",2) ) 			in_php = 0;
 			}
 			if ( !in_js ) {
-				if ( !strncmp(token, "<script", 7) ) 	in_js = nest++;
+				if ( !strncmp(token, "<script",7) ) 	in_js = nest++;
 			} else {
-				if ( !strncmp(token, "</script", 8) ) 	in_js = 0;
+				if ( !strncmp(token, "</script",8) ) 	in_js = 0;
 			}
 			if ( !in_style ) {
-				if ( !strncmp(token, "<style", 6) ) 	in_style = nest++;
+				if ( !strncmp(token, "<style",6) ) 		in_style = nest++;
 			} else {
-				if ( !strncmp(token, "</style>", 7) ) 	in_style = 0;
+				if ( !strncmp(token, "</style>",7) ) 	in_style = 0;
 			}
 			if ( !in_str ) {
 				if ( ch == '"'  && !in_com ) { in_str = nest++; stype = Q_DUBL; } 					// begin "
@@ -681,14 +648,14 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 			if ( !in_jvar ) {
 				if ( last == '$' && ch == '{' ) { in_jvar = nest++; } 	// ${
 			} else {
-				if ( ch == '}' ) { end_jvar = 1; } 					// ${
+				if ( ch == '}' ) { end_jvar = 1; } 						// }
 			}
 		}
 		if ( in_com || end_com ) {
 			if ( in_php ) {
 				count_com++;
 				last = ch;
-				fprintf ( fd_out, "%c", ch );
+				write_char ( fd_out, ch );
 				continue;		// <-----------------------------
 			}
 			if ( g_pref.commentPlan > 0 ) {
@@ -698,7 +665,7 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 					continue;	// <-----------------------------
 				}
 			}
-			//if ( g_pref.commentPlan < 2 )	fprintf ( fd_out, "%c", ch );
+			//if ( g_pref.commentPlan < 2 )	write_char ( fd_out, ch );
 		}
 		if ( in_str ) {
 			if ( stype == Q_BACK ) { // && in_jvar ) {
@@ -707,7 +674,7 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 				// if ( in_str )
 				// pass through things like <?php echo "var foo = bar" ?>
 			} else if ( !saw_attr ) {
-				fprintf ( fd_out, "%c", ch );
+				write_char ( fd_out, ch );
 				last = ch;
 				continue;		// <-----------------------------
 			}
@@ -719,12 +686,12 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 				fprintf ( fd_out, " %d elided", count_com );
 				if ( ctype == C_BLOCK ) fprintf ( fd_out, " *" );
 			}
-			if ( in_php || g_pref.commentPlan < 2 ) fprintf ( fd_out, "%c", ch );
+			if ( in_php || g_pref.commentPlan < 2 ) write_char ( fd_out, ch );
 			continue;			// <-----------------------------
 		}
 		if ( (in_str || end_str) && stype == Q_SLASH ) {
 			last = ch;
-			fprintf ( fd_out, "%c", ch );
+			write_char ( fd_out, ch );
 			continue;			// <-----------------------------
 		}
 		alpha = check_alpha ( idx, ch, last, in_str, in_js, in_php );
@@ -744,7 +711,7 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 			}
 			// here's where we decide whether or not to rewrite a token
 			if ( EQU(token, "Show") && FILE("util") ) { // debug
-				char *l = line; debug = 1;
+				// char *l = (char *)line; debug = 1;
 			}
 			if ( in_js ) rewrite = 1;
 			// only rewrite inside strings if we saw 'onclick' or similar (saw_attr):
@@ -758,11 +725,11 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 			if ( in_com ) rewrite = 0;
 			if ( rewrite ) {
 				if ( debug ) {
-					char *l = (char *)line; char *f = (char *)infile;
+					// char *l = (char *)line; char *f = (char *)infile;
 				}
 				reserved = is_reserved ( token );
 				if ( reserved || saw_dot || in_attr ) {
-					fprintf ( fd_out, "%s", token );
+					write_token ( fd_out, token );
 					if ( EQU(token, "function") ) ftoke = 1;
 					in_attr = 0;
 				} else {
@@ -796,14 +763,14 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 								ident_idx = register_ident ( token );
 								write_ident ( IDENTIFIER, fd_out, ident_idx, token );
 							} else {
-								fprintf ( fd_out, "%s", token );
+								write_token ( fd_out, token );
 							}
 						}
 						//if ( ident_idx > 29 ) break;
 					}
 				}
 			} else {
-				fprintf ( fd_out, "%s", token );
+				write_token ( fd_out, token );
 			}
 			idx = 0;
 			if ( ch == '<' ) {			// The < character is part of tokens in HTML
@@ -813,7 +780,7 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 		if ( !alpha ) {
 			if ( ch != '.' ) saw_dot = 0;
 			if ( !slash && idx == 1 && ch == '<' ) suppress = 1;
-			if ( !suppress ) fprintf ( fd_out, "%c", ch );
+			if ( !suppress ) write_char ( fd_out, ch );
 		} else {
 			if ( slash ) {
 				if ( !suppress && !in_com && g_pref.commentPlan < 2 ) fprintf ( fd_out, "/" );
@@ -983,12 +950,6 @@ short good_file ( const char *fpath, struct FTW *ftwbuf )
 	short result = EXCLUDE;
 	int idx = 0;
 
-	if ( strstr(fpath,"php") ) {
-		short bp = 1;
-	}
-	if ( strstr(fpath,"BAK") ) {
-		short bp = 1;
-	}
 	// ignore certain directories (.git), BAK files, look for html and js only:
 	ext = MMFileExtension ( fpath );
 	if ( !ext || strlen(ext) == 0 )				result = EXCLUDE;
@@ -1070,7 +1031,7 @@ char *ensure_bakfile ( const char *fpath, struct FTW *ftwbuf )
 int get_globals_in_file ( const char *fpath, const struct stat *sb, int tflag, struct FTW *ftwbuf )
 {
     #pragma unused ( sb )
-	FILE *fd_in = NULL, *fd_out = NULL;
+	FILE *fd_in = NULL;
 	char *infile = NULL, *bakfile = NULL, *ext = NULL;
 	short verbose = g_pref.verbose;
 
@@ -1103,7 +1064,6 @@ int process_file ( const char *fpath, const struct stat *sb, int tflag, struct F
 	FILE *fd_in = NULL, *fd_out = NULL;
 	char *infile = NULL, *outfile = NULL, *bakfile = NULL;
 	char *ext = NULL;
-	int len = 0;
 	short verbose = g_pref.verbose, use_stdout = 0;
 
 	if ( tflag != FTW_F )  return 0;
@@ -1177,10 +1137,5 @@ int undo_file ( const char *fpath, const struct stat *sb, int tflag, struct FTW 
 		}
 	}
 	return 0;           /* To tell nftw() to continue */
-}
-
-void undo_everything ( void )
-{
-	MMDoForAllFilesIn ( ".", undo_file );
 }
 
