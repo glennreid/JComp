@@ -15,6 +15,21 @@ JComp recursively processes all the directories from *current working directory*
 files. If it finds some, it makes a backup of the file and rewrites it. It strips comments, rewrites identifiers, and tries not to
 break anything.
 
+## Example of output
+`function encode_params ( uid, pid, gid, type="" )
+{
+	var code = btoa ( \`${uid} ${pid} ${gid} ${type}\` );
+	code = code.replaceAll ( "=", "" );
+	return code;
+}`
+
+`function e_110 ( u_916, p_923, g_917, type="" )
+{
+	var c_1033 = btoa ( \`${u_916} ${p_923} ${g_917} ${type}\` );
+	c_1033 = c_1033.replaceAll ( "=", "" );
+	return c_1033;
+}`
+
 ### Reserved words
 There are quite a few *reserved words* in Javascript that can't be rewritten, like "if" and "function" and
 `decodeURI` and lots of others. JComp won't rewrite them. We got the list from here:
@@ -35,15 +50,17 @@ When JComp sees a **`.js`** or **`.html`** file, it creates a backup folder in t
 the source file in there. It then processes that original `BAK/myFile.js` file, writing the results back to the original filename `myFile.js`.
 If you re-run JComp, it will always process the original BAK file
 
-### C Source code
+# C Source code
 JComp is a C language source file that comples to a Unix/Linux command line tool called "jcomp".
 
 The source is provided as a single C file, for ultimate simplicity. I could have provided a makefile but it's just command to compile it, and if you don't know how to use gcc, you probably shouldn't be using JComp anyway.
+Kind of proud that it's just a sincle C file, and less than 1200 lines of clean code with no external dependencies.
+I was brought up right.
 
 ## How to build it
 `gcc -o jcomp jcomp.c`
 
-## How to use it
+# How to use it: running `jcomp`
 `jcomp` or `./jcomp`
 JComp runs through all the folders in the current directory, and is somewhat aggressive about finding and rewriting files,
 so make sure you have a backup or a least understand how it works (it makes its own backups, but caveat emptor).
@@ -56,17 +73,7 @@ and want to use it and run into this problem, you can edit the source to easily 
 right at the top of the file and really obvious how it works.
 
 ## Command line options
-`jcomp -h`
-Usage:   jcomp [-v] [-t]ight [-l]oose [-w]arn [-q]uiet [-d]ata [-c]omments [-n]numberlines [-o]rig [-undo]
-  commentPlans:
-    jcomp -c 0		// comments are preserved
-    jcomp -c 1		// comments are elided but visible
-    jcomp -c 2		// comments are removed
-  tightness:
-    jcomp -t 0		// no rewrite at all
-    jcomp -t 1		// leave original identifiers in generated _i321 idents
-    jcomp -t 2		// leave first char of original identifier, like m_i321
-    jcomp -t 3		// absolute minimal identifier, like _321
+Usage:   `jcomp [-t]ight [-l]oose [-w]arn [-q]uiet [-d]ata [-c]omments [-n]numberlines [-o]rig [-undo] [-v]erbose [-h]elp `
 
 ## Option details
 **-v** - verbose
@@ -113,5 +120,17 @@ so you can correlate the output back to the input source. Also useful only in de
 This is designed to clean up any mess that JComp might have made of your source code, by restoring the
 original BAK files (and removing the BAK directory). If you want to update your JS code, run this first,
 copy your new JS files into their position, then re-run JComp to process the new tree
+
+**-h** - help
+Usage:   jcomp [-t]ight [-l]oose [-w]arn [-q]uiet [-d]ata [-c]omments [-n]numberlines [-o]rig [-undo] [-v]erbose [-h]elp 
+  commentPlans:
+    jcomp -c 0		// comments are preserved
+    jcomp -c 1		// comments are elided but visible
+    jcomp -c 2		// comments are removed
+  tightness:
+    jcomp -t 0		// no rewrite at all
+    jcomp -t 1		// leave original identifiers in generated _i321 idents
+    jcomp -t 2		// leave first char of original identifier, like m_i321
+    jcomp -t 3		// absolute minimal identifier, like _321
 
 
