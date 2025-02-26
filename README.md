@@ -51,7 +51,7 @@ There are quite a few *reserved words* in Javascript that can't be rewritten, li
 `decodeURI` and lots of others. JComp won't rewrite them. 
 In the example above, `function`, `type`, `btoa`, and `return` are reserved words.
 `replaceAll` is after a dot `.` so it is not rewritten either (it also is a reserved word, but if it were
-your own object and attribute name, it would leave it along too. We got the list from here:
+your own object and attribute name, it would leave it alone too. I got the list from here:
 [www.w3schools.com/Js/js_reserved.asp](https://www.w3schools.com/Js/js_reserved.asp)
 
 ## Identifiers within HTML
