@@ -13,26 +13,34 @@ and potentially rewrite some of them (notably just Javascript **`.js`** files an
 
 JComp recursively processes all the directories from *current working directory* where it is invoked, looking for JS and HTML
 files. If it finds some, it makes a backup of the file and rewrites it. It strips comments, rewrites identifiers, and tries not to
-break anything.
+break anything. The longer and more readable your identifier names are, the more dramatic the effect of JComp.
 
-## Example of output
-`function encode_params ( uid, pid, gid, type="" )
+## Example
+### Input
+```
+function encode_params ( uid, pid, gid, type="" )
 {
-	var code = btoa ( \`${uid} ${pid} ${gid} ${type}\` );
+	var code = btoa ( `${uid} ${pid} ${gid} ${type}` );
 	code = code.replaceAll ( "=", "" );
 	return code;
-}`
-
-`function e_110 ( u_916, p_923, g_917, type="" )
+}
+```
+### Output
+```
+function e_110 ( u_916, p_923, g_917, type="" )
 {
-	var c_1033 = btoa ( \`${u_916} ${p_923} ${g_917} ${type}\` );
+	var c_1033 = btoa ( `${u_916} ${p_923} ${g_917} ${type}` );
 	c_1033 = c_1033.replaceAll ( "=", "" );
 	return c_1033;
-}`
+}
+```
 
 ### Reserved words
-There are quite a few *reserved words* in Javascript that can't be rewritten, like "if" and "function" and
-`decodeURI` and lots of others. JComp won't rewrite them. We got the list from here:
+There are quite a few *reserved words* in Javascript that can't be rewritten, like `if` and `function` and
+`decodeURI` and lots of others. JComp won't rewrite them. 
+In the example above, `function`, `type`, `btoa`, and `return` are reserved words.
+`replaceAll` is after a dot `.` so it is not rewritten either (it also is a reserved word, but if it were
+your own object and attribute name, it would leave it along too. We got the list from here:
 [www.w3schools.com/Js/js_reserved.asp](https://www.w3schools.com/Js/js_reserved.asp)
 
 ## Identifiers within HTML
