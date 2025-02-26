@@ -132,7 +132,7 @@ char *g_reserved[] = {
 	"setTimeout", "clearTimeout", "atob", "btoa", "parseInt", "parseFloat", "encodeURI", "JSON",
 	"<", "script", "/script", "<script", "<script>", "</script>", "type", "src", "ref",
 	"<?php", "?>", "empty", "foreach", "echo", "include", "PARAM",
-	"\n", "n", ";\n", "g", "nvar", "Location", "http", "https",
+	"\n", "n", ";\n", "g", "nvar", "Location", "http", "https", "XMLHttpRequest",
 	"google", "center", "zoom", "disableDefaultUI", "mapTypeId", "AdvancedMarkerElement", "mapInsert",
 	"dataType", "url", "textStatus", "errorThrown", "encodeURIComponent",
 	"jQuery", "$", "Quill", "theme", "modules", "toolbar", "imageResize", "displaySize",
@@ -758,7 +758,7 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 			if ( in_com ) rewrite = 0;
 			if ( rewrite ) {
 				if ( debug ) {
-					char *l = line; char *f = infile;
+					char *l = (char *)line; char *f = (char *)infile;
 				}
 				reserved = is_reserved ( token );
 				if ( reserved || saw_dot || in_attr ) {
