@@ -70,8 +70,9 @@ I was brought up right.
 
 # How to use it: running `jcomp`
 `jcomp` or `./jcomp`
+
 JComp runs through all the folders in the current directory, and is somewhat aggressive about finding and rewriting files,
-so make sure you have a backup or a least understand how it works (it makes its own backups, but caveat emptor).
+so make sure you have a backup or a least understand how it works (it makes its own backups, but be careful).
 
 ## Caveats
 If you use external libraries with identifiers that shouldn't be changed (like JQuery), there's no way JComp currently
@@ -106,25 +107,25 @@ Prevents any sort of spew on stderr or stdout
 **-d** : data\
 Writes files in local directory with identifiers found. File is `identifiers.txt` and maybe `functions.txt`
 
-**-c** - commentPlan
+**-c** - commentPlan\
 Javascript comments (both // and /* */) are rewritten according to three options:\
 > **0** - comments are preserved intact\
 > **1** - comments are *elided*, so `/* my longish comment */` becomes `/* 19 elided */`\
 > **2** - comments are completely removed, including the `//` and `/* */` characters\
 
-**-n** : number lines
+**-n** : number lines\
 Adds line numbers before each line of output. Only for debugging
 This adds **`001: `** style line numbers before each line of output, which makes the output not legal Javascript anymore, but if it doesn't work,
 this can be helpful in tracking down which lines of code are confusing JComp.
 
-**-o** : orig
+**-o** : orig\
 This is only meaningful in the context of **-n** line numbering.
 
 If/when comments are removed during rewrite, or if (in the future) whitespace is reduced, the line numbers in the
 output will not match the line numbers from the original JS source. using **-o** will emit the original line numbers,
 so you can correlate the output back to the input source. Also useful only in debugging.
 
-**-undo** : undo
+**-undo** : undo\
 Undoes the entire process, finding all the BAK files and putting them in the original files
 This is designed to clean up any mess that JComp might have made of your source code, by restoring the
 original BAK files (and removing the BAK directory). If you want to update your JS code, run this first,
