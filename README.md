@@ -3,7 +3,18 @@
 JComp processes a tree of Javascript sources to rewrite variables and functions to reduce size and (importantly) obfuscate the code. 
 
 # Rationale
+Most available "minifiers" or "obfuscators" or "uglifiers" don't actually rewrite the variable names, they just remove white space,
+which is put back automatically in browsers with "pretty printers". If you really want to obfuscate your code, you have to rewrite
+all the identifiers.
+
 It is difficult to change variable names when they are referenced across many files and sometimes other scripts that generate JS (like PHP echo statements).
+This was the genesis of JComp -- to solve this problem. It does the gnarly work to find all the references to functions and variables
+to make them consistent across a whole project, not just within a single file. It's harder than it sounds -- you basically have to
+write a Javascript compiler, although JComp is a clever, minimal first approximation which scans for relevant tokens and decides
+how to rewrite them, carefully considering comment blocks and string bodies and multi-language stuff like PHP code that emits
+fragments of Javascript, and HTML files that contain `<script>` blocks, or all three, like an HTML file with something like this:
+
+`<span><?php echo "var myVar = $serverVal;\n" ?></span>`.
 
 # How it works
 If you declare a `function` in one Javascript file, and use it in another (which everyone does all the time), and you want to change
