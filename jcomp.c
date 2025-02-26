@@ -39,12 +39,13 @@
 #define C_LINE  1	// style
 #define C_BLOCK 2	/* style */
 // string delimiters:
-#define Q_DUBL 1
-#define Q_SING 2
-#define Q_BACK 3
-#define Q_REGX 4
+#define Q_NONE '\0'
+#define Q_DUBL '"'
+#define Q_SING '\''
+#define Q_BACK '`'
+#define Q_SLASH '/'
 // tightness:
-#define T_NONE 0
+#define T_NONE  0
 #define T_LONG  1
 #define T_SHORT 2
 #define T_MIN   3
@@ -64,7 +65,7 @@ struct {
 	short data;			// write out identifiers.txt and functions.txt
 	short lineNums;		// emit line numbers at the beginning of every line (mostly for debugging)
 	short origLines;	// emit line numbers that match the original source
-} g_pref = { 1, 0, 1, 1, 0, 0, 1 };
+} g_pref = { 1, 0, 1, 1, 1, 0, 1 };
 //           ^c ^v ^t ^w ^d ^n ^o
 
 // g_count
@@ -94,9 +95,9 @@ int undo_file ( const char *infile, const struct stat *sb, int tflag, struct FTW
 void undo_everything ( void );
 
 #define EQU(X,Y)   !strcmp(X,Y)
-#define LINE(X)    count_lines==X
+#define LINE(X)    line_count==X
 #define FILE(X)    strstr(infile,X)
-#define FLINE(X,Y) count_lines==X && strstr(infile,Y)
+#define FLINE(X,Y) line_count==X && strstr(infile,Y)
 #define TOKE(X)    !strcmp(token,X)
 
 char *g_skip_files[] = {
@@ -157,6 +158,7 @@ char *g_attributes[] = { // https://www.w3schools.com/TAGs/ref_attributes.asp
 };
 short g_help = 0;
 short g_undo_mode = DEFAULT_UNDO;
+short g_conflate_idents = 1;
 
 int main ( int argc, const char * argv[] ) {
 	int result = 0;
@@ -252,7 +254,7 @@ void save_data ( char **list, int count, char *filename )
 	sprintf ( path, "./%s", filename );
 	FILE *fd = fopen ( path, "w" );
 	if ( fd ) {
-		for ( idx = 0; idx < idx_f; idx++ ) {
+		for ( idx = 0; idx < count; idx++ ) {
 			fprintf ( fd, "%s\n", list[idx] );
 		}
 		fclose ( fd );
@@ -279,7 +281,7 @@ int known_func ( char *name )
 {
 	int idx = 0, found = -1;
 
-	if ( g_pref.tight == 3 ) return known_ident ( name );
+	if ( g_conflate_idents ) return known_ident ( name );
 
 	for ( idx = 0; idx < idx_f; idx++ ) {
 		if ( EQU(g_funcs[idx], name) ) {
@@ -294,7 +296,7 @@ int register_func ( char *name )
 	int idx = 0, found = known_func ( name );
 	int len = 0;
 
-	if ( g_pref.tight == 3 ) return register_ident ( name );
+	if ( g_conflate_idents ) return register_ident ( name );
 
 	if ( found == -1 && name ) {
 		if ( idx_f >= MAX_FUNCTIONS ) {
@@ -336,19 +338,13 @@ int register_ident ( char *name )
 {
 	int idx = 0, found = known_ident ( name );
 	int len = 0;
-	if ( name ) {
+
+	if ( found == -1 && name) {
 		if ( idx_i >= MAX_IDENTS ) {
 			fprintf ( stderr, "MAX_IDENTS[%d], can't register %s in %s\n", idx_i, name, g_currfile );
 			exit ( -1 );
 		}
 		len = (int)strlen ( name );
-		for ( idx = 0; idx < idx_i; idx++ ) {
-			if ( EQU(g_idents[idx], name) ) {
-				found = idx; break;
-			}
-		}
-	}
-	if ( found == -1 ) {
 		if ( len < 100 ) {
 			char *save = (char *)malloc ( len + 1 );
 			strcpy ( save, name );
@@ -388,7 +384,7 @@ short valid_ident ( char *token )
 	return valid;
 }
 
-short regex ( char *token )
+short match_or_replace ( char *token )
 {
 	short is_regex = 0;
 	if ( !strncmp(token, "match", 5) ) is_regex = 1;
@@ -436,12 +432,26 @@ short known_attribute ( char *word )
 	return res;
 }
 
+char is_quote ( char ch )
+{
+	char type = 0;
+	short idx = 0;
+	char delims[] = { Q_DUBL, Q_SING, Q_BACK, Q_SLASH, Q_NONE };
+	for ( idx = 0; ; idx++ ) {
+		if ( delims[idx] == Q_NONE ) break;
+		if ( ch == delims[idx] ) {
+			type = ch; break;
+		}
+	}
+	return type;
+}
+
 int find_functions ( const char *infile, FILE *fd_in )
 {
 	int result = 0;
 	char ch = '\0', last = '\0';
 	char *token = g_token, *line = g_line;
-	int count_ch=0, count_lines=1, count_com=0;
+	int count_ch=0, line_count=1, count_com=0;
 	int func_idx=0;
 	int idx=0, cdx=0;
     short verbose = g_pref.verbose;
@@ -455,7 +465,7 @@ int find_functions ( const char *infile, FILE *fd_in )
 		if ( cdx <= 1022 ) { line[cdx] = ch; line[cdx+1] = '\0'; }
 		cdx++;
 		switch ( ch ) {
-			case '\r': case '\n': count_lines++; cdx = 0; break;
+			case '\r': case '\n': line_count++; cdx = 0; break;
 			case '{': case '}': case '(': case ')': case '[': case ']':
 			case ';': case ':':
 				if ( idx == 0 ) ftoke = 0;
@@ -547,10 +557,12 @@ void write_ident ( short type, FILE *fd_out, int f_idx, char *token )
 
 	if ( type == FUNCTION ) code = 'f';
 	sprintf ( prefix, "%c", code );\
-	if ( g_pref.tight == T_MIN ) strcpy ( prefix, "" );
+	if ( g_pref.tight == T_MIN || g_conflate_idents ) strcpy ( prefix, "" );
 
 	if ( g_pref.tight ) {
-		sprintf ( ident, "%s_%s%d", min, prefix, f_idx );
+		if ( f_idx >= 0 ) {
+			sprintf ( ident, "%s_%s%d", min, prefix, f_idx );
+		}
 	}
 	fprintf ( fd_out, "%s", ident );
 }
@@ -558,19 +570,18 @@ void write_ident ( short type, FILE *fd_out, int f_idx, char *token )
 int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 {
 	int result = 0;
-	int count_ch=0, count_lines=1, count_com=0;
+	int count_ch=0, line_count=1, count_com=0;
 	char ch = '\0', last = '\0';
 	char *token = g_token, *line = g_line, *string = g_string;
 	int func_idx=0, ident_idx=0;
 	int idx=0, cdx=0, sdx=0;
-	short in_js=0, in_php=0, in_com=0, in_str=0, in_jvar=0, in_style=0, in_attr=0, nest = 1;
-	short ctype=0, stype=0, ftoke=0, slash=0, saw_dot=0, saw_attr=0, suppress=0;
+	int lnums[32];
+	short in_js=0, in_php=0, in_com=0, in_str=0, in_jvar=0, in_style=0, in_attr=0, in_regx=0, in_parens=0;
+	short ctype=0, ftoke=0, slash=0, saw_dot=0, saw_attr=0, attr_args=0, suppress=0, nest = 1, stype=0;;
 	short debug = 0;
 
 	token[0] = '\0';
-	if ( strstr(infile, "home/BAK/index") ) {	// debug hook for specific file
-		debug = 1;
-	}
+
 	char *ext = MMFileExtension ( infile );
 	if ( EQU(ext, "js") ) in_js = nest++;
 
@@ -580,24 +591,31 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 		if ( cdx <= MAX_LINE - 2 ) {
 			line[cdx] = ch; line[cdx+1] = '\0';
 		} else {
-			if ( g_pref.warn ) fprintf ( stderr, "WARNING: %s line %d longer than %d chars\n", infile, count_lines, MAX_LINE );
+			if ( g_pref.warn ) fprintf ( stderr, "WARNING: %s line %d longer than %d chars\n", infile, line_count, MAX_LINE );
 		}
 		if ( cdx == 0 && g_pref.lineNums ) {
 			if ( !in_com || g_pref.commentPlan == 0 ) {
-				fprintf ( fd_out, "%03d: ", count_lines );
+				fprintf ( fd_out, "%03d: ", line_count );
 			}
 		}
 		cdx++;
+		if ( strstr(infile, "server") ) {	// debug hook for specific file
+			if ( line_count >= 691 )
+				debug = 1;
+		}
 		switch ( ch ) {
 			case '\r': case '\n':
 				if ( g_pref.origLines || (!in_com || g_pref.commentPlan == 0 || ctype == C_LINE) ) {
-					count_lines++;
+					line_count++;
 				}
 				cdx = 0;
 				if ( stype != Q_DUBL ) { in_str = 0; stype = 0; }	// line end terminates string(?)
 				in_jvar = 0;
 				break;
-			case '{': case '}': case '(': case ')': case '[': case ']':
+			case '{': case '(': case '[':
+				if ( !in_regx ) in_parens++; break;
+			case '}': case ')': case ']':
+				if ( !in_regx ) in_parens--; break;
 			case ';': case ':':
 				if ( idx == 0 ) ftoke = 0;
 				break;
@@ -605,7 +623,8 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 		if ( in_com ) {
 			if ( ch == '/'  && last == '*' && ctype == C_BLOCK ) { in_com = 0; end_com = 1; } /* end */
 			if ( ch == '\n' && ctype == C_LINE ) { in_com = 0; end_com = 1; } 			   // end
-		} else if ( !in_str ) { // ignore slashes inside string bodies
+		} else if ( !in_str && !match_or_replace(token) ) { // ignore slashes inside string bodies or regex's
+		//} else if ( !in_str && !in_parens ) { // ignore slashes inside string bodies or regex's
 			if ( ch == '/'  && last != '<' ) {
 				if ( slash ) {
 					in_com = nest++; ctype = C_LINE; count_com = 0;
@@ -639,12 +658,12 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 				if ( ch == '"'  && !in_com ) { in_str = nest++; stype = Q_DUBL; } 					// begin "
 				if ( ch == '\'' && !in_com ) { in_str = nest++; stype = Q_SING; } 					// begin '
 				if ( ch == '`'  && !in_com ) { in_str = nest++; stype = Q_BACK; }  					// begin `
-				if ( ch == '/'  && regex(token) ) { in_str = 1; stype = Q_REGX; }					// begin /regex/
+				if ( ch == '/'  && match_or_replace(token) ) { in_str = 1; stype = Q_SLASH; }		// begin /regex/
 			} else {
 				if ( ch == '"'  && stype == Q_DUBL && last != '\\' ) { in_str = 0; end_str = 1; } 	// end "
 				if ( ch == '\'' && stype == Q_SING && last != '\\' ) { in_str = 0; end_str = 1; }	// end '
 				if ( ch == '`'  && stype == Q_BACK && last != '\\' ) { in_str = 0; end_str = 1; } 	// end `
-				if ( ch == '/'  && stype == Q_REGX && last != '\\' ) { in_str = 0; end_str = 1; } 	// end /regex/
+				if ( ch == '/'  && stype == Q_SLASH && last != '\\' ) { in_str = 0; end_str = 1; } 	// end /regex/
 				if ( !end_str ) {	// collect the body of the string, for debugging
 					if ( sdx <= MAX_LINE - 2 ) {
 						string[sdx] = ch; string[sdx+1] = '\0';
@@ -674,7 +693,7 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 			//if ( g_pref.commentPlan < 2 )	fprintf ( fd_out, "%c", ch );
 		}
 		if ( in_str ) {
-			if ( stype == Q_BACK && in_jvar ) {
+			if ( stype == Q_BACK ) { // && in_jvar ) {
 				// keep going to parse the inside of `${js strings}`;
 			} else if ( in_php ) {
 				// if ( in_str )
@@ -695,7 +714,7 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 			if ( in_php || g_pref.commentPlan < 2 ) fprintf ( fd_out, "%c", ch );
 			continue;			// <-----------------------------
 		}
-		if ( (in_str || end_str) && stype == Q_REGX ) {
+		if ( (in_str || end_str) && stype == Q_SLASH ) {
 			last = ch;
 			fprintf ( fd_out, "%c", ch );
 			continue;			// <-----------------------------
@@ -705,7 +724,7 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 			saw_dot = 1;
 		}
 		short in_token = alpha;
-		//if ( in_str && stype == Q_REGX ) in_token = 0;
+		//if ( in_str && stype == Q_SLASH ) in_token = 0;
 		if ( in_token ) {
 			token[idx++] = ch;
 		} else if ( idx > 0 ) {				// end of token
@@ -718,12 +737,12 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 			if ( in_js ) rewrite = 1;
 			// only rewrite inside strings if we saw 'onclick' or similar (saw_attr):
 			if ( (in_str || end_str) && !saw_attr )  rewrite = 0;
-			if ( (in_str || end_str) && stype == Q_REGX ) rewrite = 0;		// don't rewrite regex's
+			if ( (in_str || end_str) && stype == Q_SLASH ) rewrite = 0;		// don't rewrite regex's
 			// or if we're inside a `javascript ${var}`
 			if ( in_str && stype == Q_BACK && (in_jvar || end_jvar) ) rewrite = 1;
 			if ( in_php && in_str && in_js )
 				rewrite = 1;
-			if ( saw_attr ) rewrite = 1;
+			if ( saw_attr || attr_args ) rewrite = 1;
 			if ( in_com ) rewrite = 0;
 			if ( rewrite ) {
 				reserved = is_reserved ( token );
@@ -734,13 +753,22 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 				} else {
 					if ( strlen(token) > 0 ) {
 						if ( ftoke || saw_attr ) {
-							func_idx = register_func ( token );
+							func_idx = known_func ( token );
 							write_ident ( FUNCTION, fd_out, func_idx, token );
 							ftoke = 0;
+							if ( saw_attr ) attr_args = 1;
 							saw_attr = 0;
+						} else if ( attr_args ) {
+							if ( in_str >= 1 && end_str ) {	// quotes within quotes
+							} else {
+								ident_idx = register_ident ( token );
+								write_ident ( IDENTIFIER, fd_out, ident_idx, token );
+								ftoke = 0;
+								//saw_attr = 0;
+							}
 						} else {
 							short rewriteIdent = 1;
-							short valid = valid_ident ( token );
+							//short valid = valid_ident ( token );
 							func_idx = known_func ( token );
 							if ( in_php ) {
 								if ( token[0] == '$' ) {	// turn off identifier rewrite in PHP vars
@@ -776,6 +804,10 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 				if ( !suppress && !in_com && g_pref.commentPlan < 2 ) fprintf ( fd_out, "/" );
 				slash = 0;
 			}
+		}
+		if ( end_str || ch == '\0' ) {
+			saw_attr = 0;
+			attr_args = 0;
 		}
 		suppress = 0;
 		last = ch;
@@ -1063,8 +1095,7 @@ int process_file ( const char *fpath, const struct stat *sb, int tflag, struct F
 
 	if ( !good_file(fpath, ftwbuf) ) {
 		if ( verbose ) printf ( "EXCLUDE %s\n", fpath );
-		g_count.skip++;
-		return 0;
+		g_count.skip++; return 0;
 	}
 	bakfile = ensure_bakfile ( fpath, ftwbuf );
 	ext = MMFileExtension ( fpath );
@@ -1075,14 +1106,12 @@ int process_file ( const char *fpath, const struct stat *sb, int tflag, struct F
 	if ( !fd_in ) {
 		printf ( "Cannot read %s\n", infile ); return -1; }
 
-	if ( use_stdout ) {
-		fd_out = stdout;
-	} else {
+	if ( use_stdout ) { fd_out = stdout; } else {
 		fd_out = fopen ( outfile, "w" );
 		if ( !fd_out ) { printf ( "Cannot write %s\n", outfile ); return -1; }
 	}
-
 	if ( verbose ) printf ( "%s FILE: %s\n", ext, infile );
+
 	rewrite_file ( infile, fd_in, fd_out );
 
 	if ( fd_in  && fd_in  != stdin )  fclose ( fd_in );
@@ -1101,8 +1130,7 @@ int undo_file ( const char *fpath, const struct stat *sb, int tflag, struct FTW 
 	char *filename = (char *)fpath + ftwbuf->base;
 	char *bakfile = NULL;
 	char rmpath[1024], restorepath[1024];
-	short verbose = g_pref.verbose;
-	short really = 1;
+	short verbose = g_pref.verbose, really = 1;
 
 	if ( !strstr(fpath, "BAK" ) ) {		// don't touch any file without BAK in the path
 		return 0;
@@ -1114,14 +1142,11 @@ int undo_file ( const char *fpath, const struct stat *sb, int tflag, struct FTW 
 				int status = rmdir ( fpath );
 				if ( status ) fprintf ( stderr, "Could not rmdir: %s\n", rmpath );
 			}
-		} else {
-			//printf ( "%s: %d %s\n", fpath, tflag, type );
 		}
 		return 0;
 	}
-	if ( tflag != FTW_F ) {
-		return 0;
-	}
+	if ( tflag != FTW_F ) return 0;
+
 	// construct restorepath by removing "/BAK" from the fpath: ./js/BAK/file -> ./js/file
 	strcpy ( restorepath, fpath );
 	char *bak = strstr(restorepath, "BAK" );
