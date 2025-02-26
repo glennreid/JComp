@@ -59,14 +59,14 @@ char g_token[MAX_LINE], g_line[MAX_LINE], g_string[MAX_LINE];
 // g_pref
 struct {
 	short commentPlan;	// 0 = keep, 1 = elide, 2 = eliminate [default=1]
-	short verbose;		// tempted to write a really long comment here to describe what verbose means
 	short tight;		// make identifiers and function names 1 char vs full original identifier
-	short warn;			// emit warnings on stderr [default=1]
 	short data;			// write out identifiers.txt and functions.txt
 	short lineNums;		// emit line numbers at the beginning of every line (mostly for debugging)
 	short origLines;	// emit line numbers that match the original source
-} g_pref = { 1, 0, 1, 1, 1, 0, 1 };
-//           ^c ^v ^t ^w ^d ^n ^o
+	short warn;			// emit warnings on stderr [default=1]
+	short verbose;		// tempted to write a really long comment here to describe what verbose means
+} g_pref = { 1, 1, 1, 0, 1, 1, 0 };
+//           ^c ^t ^d ^n ^o ^w ^v
 
 // g_count
 struct { int js; int html; int php; int skip; } g_count = { 0, 0, 0, 0 };
@@ -200,6 +200,7 @@ int main ( int argc, const char * argv[] ) {
 		printf ( "    jcomp -t 3		// absolute minimal identifier, like _321\n" );
 		exit ( 0 );
 	}
+
 	if ( g_undo_mode ) {
 		short ask = 1;
 		if ( ask ) {
@@ -227,6 +228,10 @@ int main ( int argc, const char * argv[] ) {
 		exit(0);
     }
 
+	if ( 1 || g_pref.verbose ) {
+		printf ( "Comment Plan: %d\n", g_pref.commentPlan );
+		printf ( "Tightness: %d\n", g_pref.tight );
+	}
 	// two-pass algorithm:
 	MMDoForAllFilesIn ( ".", get_globals_in_file );
 	MMDoForAllFilesIn ( ".", process_file );
@@ -615,7 +620,10 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 			case '{': case '(': case '[':
 				if ( !in_regx ) in_parens++; break;
 			case '}': case ')': case ']':
-				if ( !in_regx ) in_parens--; break;
+				if ( !in_regx ) in_parens--;
+				// special case ending attr_args mode for onclick='proc(foo,bar);'
+				if ( ch == ')' && attr_args ) attr_args = 0;
+				break;
 			case ';': case ':':
 				if ( idx == 0 ) ftoke = 0;
 				break;
@@ -734,6 +742,10 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 			if ( known_attribute(token) ) {
 				in_attr = nest++; saw_attr = 1; rewrite = 1;
 			}
+			// here's where we decide whether or not to rewrite a token
+			if ( EQU(token, "Show") && FILE("util") ) { // debug
+				char *l = line; debug = 1;
+			}
 			if ( in_js ) rewrite = 1;
 			// only rewrite inside strings if we saw 'onclick' or similar (saw_attr):
 			if ( (in_str || end_str) && !saw_attr )  rewrite = 0;
@@ -745,6 +757,9 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 			if ( saw_attr || attr_args ) rewrite = 1;
 			if ( in_com ) rewrite = 0;
 			if ( rewrite ) {
+				if ( debug ) {
+					char *l = line; char *f = infile;
+				}
 				reserved = is_reserved ( token );
 				if ( reserved || saw_dot || in_attr ) {
 					fprintf ( fd_out, "%s", token );
