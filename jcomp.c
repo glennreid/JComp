@@ -23,6 +23,7 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <math.h>
 #define _XOPEN_SOURCE 500
 #define _XOPEN_SOURCE_EXTENDED 1
 #define _LARGE_TIME_API
@@ -35,6 +36,8 @@
 #define MAX_FUNCTIONS 1024
 #define MAX_IDENTS (4096 * 4)
 #define MAX_LINE 2048
+#define FUNCTION 1
+#define IDENTIFIER 2
 // comment types:
 #define C_LINE  1	// style
 #define C_BLOCK 2	/* style */
@@ -59,7 +62,7 @@ char g_token[MAX_LINE], g_line[MAX_LINE], g_string[MAX_LINE];
 // g_pref
 struct {
 	short commentPlan;	// 0 = keep, 1 = elide, 2 = eliminate [default=1]
-	short tight;		// make identifiers and function names 1 char vs full original identifier
+	short tight;		// 0=orig, 1=unique, 2=tight, 3=min
 	short data;			// write out identifiers.txt and functions.txt
 	short lineNums;		// emit line numbers at the beginning of every line (mostly for debugging)
 	short origLines;	// emit line numbers that match the original source
@@ -232,7 +235,7 @@ int main ( int argc, const char * argv[] ) {
 		printf ( "%d JS files\n", g_count.js ); 	printf ( "%d HTML files\n", g_count.html );
 		printf ( "%d PHP files\n", g_count.php ); 	printf ( "%d Skipped files\n", g_count.skip );
 	}
-	if ( g_pref.data ) save_data ( g_funcs, idx_f, "functions.txt" );
+	if ( g_pref.data && idx_f > 0 ) save_data ( g_funcs, idx_f, "functions.txt" );
 	if ( g_pref.data ) save_data ( g_idents, idx_i, "identifiers.txt" );
 
 	return result;
@@ -507,16 +510,24 @@ int find_functions ( const char *infile, FILE *fd_in )
 	return result;
 }
 
-#define FUNCTION 1
-#define IDENTIFIER 2
-void write_ident ( short type, FILE *fd_out, int f_idx, char *token )
+int scnt = 0;
+void write_ident ( short type, FILE *fd_out, int ident_idx, char *token )
 {
-	char min[32] = { '\0' };
-	char prefix[16] = { '\0' };
-	char code = 'i';
-	char ident[128];
+	int base=52, digits=6;		// a-zA-Z instead of 0-9
+	char start='a';
+	char min[32]={'\0'}, prefix[16]={'\0'}, code='i', ibuf[128], dbuf[16];
+	char *unique=dbuf, *ident=ibuf;
+	int rem=0, ltr=ident_idx;
 
-	//  tightness
+	dbuf[digits] = start; dbuf[digits+1] = '\0';
+	while ( ltr > 0 ) {
+		rem = ltr - ((ltr/base) * base);
+		dbuf[digits] = (rem<26) ? start + rem : 'A' + (rem-26);
+		ltr /= base;
+		if ( ltr > 0 ) digits--;
+	}
+	unique = (char *)(unique+digits);
+	// different result based on tightness
 	strcpy ( ident, token );		// unless rewritten
 	if ( g_pref.tight == T_LONG ) strcpy ( min, token );
 	if ( g_pref.tight == T_SHORT ) sprintf ( min, "%c", token[0] );
@@ -526,7 +537,8 @@ void write_ident ( short type, FILE *fd_out, int f_idx, char *token )
 	if ( g_pref.tight == T_MIN || g_conflate_idents ) strcpy ( prefix, "" );
 
 	if ( g_pref.tight ) {
-		if ( f_idx >= 0 ) { sprintf ( ident, "%s_%s%d", min, prefix, f_idx ); }
+		//sprintf ( ident, "%s_%s%d", min, prefix, ident_idx );
+		sprintf ( ident, "%s_%s%s", min, prefix, unique );
 	}
 	fprintf ( fd_out, "%s", ident );
 }
