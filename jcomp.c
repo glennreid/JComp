@@ -23,6 +23,7 @@
 #include <ctype.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <time.h>
 #include <math.h>
 #define _XOPEN_SOURCE 500
 #define _XOPEN_SOURCE_EXTENDED 1
@@ -30,6 +31,7 @@
 #define __USE_XOPEN_EXTENDED 1
 #include <ftw.h>
 
+#define VERSION 1.0
 #define DEFAULT_UNDO 0
 #define EXCLUDE 0
 #define ALLOW   1
@@ -569,6 +571,13 @@ int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out )
 
 	char *ext = MMFileExtension ( infile );
 	if ( EQU(ext, "js") ) in_js = nest++;
+
+	if ( in_js ) {	// write comment to indicate processing by JComp
+		time_t currtime = time(NULL);
+		char buff[32];
+		strftime ( buff, 20, "%m/%d/%y %H:%M:%S", localtime(&currtime) );
+		fprintf ( fd_out, "\n// JComp v%0.1f %s\n", VERSION, buff );
+	}
 
 	while ( (ch = fgetc(fd_in)) != EOF ) {
 		short alpha = 0, end_com = 0, end_str = 0, end_jvar = 0;
