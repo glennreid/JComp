@@ -65,7 +65,7 @@ struct {
 	short origLines;	// emit line numbers that match the original source
 	short warn;			// emit warnings on stderr [default=1]
 	short verbose;		// tempted to write a really long comment here to describe what verbose means
-} g_pref = { 1, 1, 1, 0, 1, 1, 0 };
+} g_pref = { 1, 2, 1, 0, 1, 1, 0 };
 //           ^c ^t ^d ^n ^o ^w ^v
 
 // g_count
@@ -954,7 +954,7 @@ short good_file ( const char *fpath, struct FTW *ftwbuf )
 	ext = MMFileExtension ( fpath );
 	if ( !ext || strlen(ext) == 0 )				result = EXCLUDE;
 	if ( filename[0] == '.' ) 					result = EXCLUDE;
-	if ( strstr(fpath, "php") ) 				result = EXCLUDE;
+//	if ( strstr(fpath, "php") ) 				result = EXCLUDE;
 	if ( EQU(ext,"html") || EQU(ext,"shtml") )	result = ALLOW;
 	if ( EQU(ext,"js") ) 						result = ALLOW;
 	if ( EQU(ext,"jpg") ) 						result = EXCLUDE;
