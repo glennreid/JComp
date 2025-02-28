@@ -5,7 +5,7 @@
 //  Created by Glenn Reid on 2/21/25.
 //
 //  Compile: gcc -o jcomp jcomp.c'
-//  Usage:   jcomp [-v] [-t]ight [-l]oose [-w]arn [-q]uiet [-d]ata [-c]omments [-n]numberlines [-o]rig [-undo]
+//  Usage:   jcomp [-v] [-t]ight [-l]oose [-w]arn [-q]uiet [-d]ata [-c]omments [-n]umberlines [-o]rig [-undo]
 //
 //  commentPlans:
 //    jcomp -c 0		// comments are preserved
@@ -188,7 +188,7 @@ int main ( int argc, const char * argv[] ) {
 	printf("Working dir: %s\n", cwd);
 
 	if ( g_help ) {
-		printf ( "Usage: jcomp [-v] [-t]ight [-l]oose [-w]arn [-q]uiet [-d]ata [-c]omments [-n]numberlines [-o]rig [-undo]\n" );
+		printf ( "Usage: jcomp [-v] [-t]ight [-l]oose [-w]arn [-q]uiet [-d]ata [-c]omments [-n]umberlines [-o]rig [-undo]\n" );
 		printf ( "  commentPlans:\n" );
 		printf ( "    jcomp -c 0		// comments are preserved\n" );
 		printf ( "    jcomp -c 1		// comments are elided but visible\n" );

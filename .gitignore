@@ -1,3 +1,5 @@
+*~
+.DS_Store
 /groups
 /js
 /inc
@@ -15,3 +17,5 @@ jcomp
 /join
 /main
 /post
+jcomp.dSYM
+BAK
