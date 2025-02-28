@@ -28,7 +28,7 @@ clean:
 	rm jcomp
 
 tests:
-	./jcomp -v -t
+	./jcomp -v -t 2
 
 undo:
 	./jcomp -undo
