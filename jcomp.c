@@ -92,7 +92,7 @@ void write_token ( FILE *fd_out, char *token );
 void write_char ( FILE *fd_out, char ch );
 int rewrite_file ( const char *infile, FILE *fd_in, FILE *fd_out );
 unsigned long MMDoForAllFilesIn ( const char *directory, IterateProcPtr apply_proc );
-short MMFilePathExists ( const char *path );
+struct stat *MMFilePathExists ( const char *path );
 short MMCopyFile ( const char *source, const char *dest );
 char *MMFileExtension ( const char *path );
 short good_file ( const char *fpath, struct FTW *ftwbuf );
@@ -116,6 +116,7 @@ char *g_allow_files[] = {
 };
 // https://www.w3schools.com/Js/js_reserved.asp
 char *g_reserved[] = {
+	"var", "let", "if", "else", "function", "while", "for",		// common ones first; goes faster :)
 	"abstract", "arguments", "await", "boolean", "break", "byte", "case", "catch", "char", "class",
 	"const", "continue", "debugger", "default", "delete", "do", "double", "else", "enum", "eval",
 	"export", "extends", "false", "final", "finally", "float", "for", "function", "goto", "if",
@@ -144,9 +145,9 @@ char *g_reserved[] = {
 	"jQuery", "$", "Quill", "theme", "modules", "toolbar", "imageResize", "displaySize",
 	"hasOwnProperty", "Infinity", "isFinite", "isNaN", "isPrototypeOf", "length", "Math", "NaN",
 	"name", "Number", "Object", "prototype", "String", "toString", "undefined", "valueOf",
-	"NULL", "Set", "Map", "of", "alert",
+	"NULL", "Set", "Map", "of", "alert", "Option",
 	"cPage", "is_mobile",
-	"xhr",
+	"xhr", "navigator",
 	NULL
 };
 char *g_attributes[] = { // https://www.w3schools.com/TAGs/ref_attributes.asp
@@ -846,19 +847,12 @@ unsigned long MMDoForAllFilesIn ( const char *directory, IterateProcPtr apply_pr
 	return result;
 }
 
-short MMFilePathExists ( const char *path )
+struct stat s_file_stat;
+struct stat *MMFilePathExists ( const char *path )
 {
-	struct stat file_stat;
-	short exists = 0;
-	int result = stat ( path, &file_stat );
-
-	if ( result == 0 ) {
-		exists = 1;
-		if ( file_stat.st_size > 0 ) {
-			// and it has non-zero length, which we don't care about in this app
-		}
-	}
-	return exists;
+	struct stat *file_stat = &s_file_stat;
+	if ( 0 == stat(path, file_stat) ) return file_stat;
+	return NULL;
 }
 
 void MMDeleteFile ( char *filePath )
@@ -1032,20 +1026,36 @@ char *bakfile_name ( const char *fpath, struct FTW *ftwbuf )
 	return s_bakfile;
 }
 
-char *ensure_bakfile ( const char *fpath, struct FTW *ftwbuf )
+char *ensure_bakfile ( const char *fpath, const struct stat *sb, struct FTW *ftwbuf )
 {
+	char *bakfile = NULL;
+	struct stat *existingBak = NULL;
 	char *dir = bakfile_dir ( fpath, ftwbuf );
-	char *filename = NULL;
+	short newer = 0;
 	if ( dir ) {
-		if ( !MMFilePathExists(dir) ) {
-			MMMakeDir ( dir, 0755 );
-		}
-		filename = bakfile_name ( fpath, ftwbuf );
-		if ( !MMFilePathExists(filename) ) {
-			MMCopyFile( fpath, filename );
+		if ( !MMFilePathExists(dir) ) MMMakeDir ( dir, 0755 );
+		bakfile = bakfile_name ( fpath, ftwbuf );
+		existingBak = MMFilePathExists ( bakfile );
+		if ( existingBak ) {	// future work to allow newer non-compressed file to be re-run
+			#if defined(__MACH__)
+				if ( sb->st_mtimespec.tv_sec > existingBak->st_mtimespec.tv_sec ) {
+					unsigned long howmuch = sb->st_mtime - existingBak->st_mtime;
+					newer = 1;
+				}
+			#else
+				if ( sb->st_mtime > existingBak->st_mtime ) {
+					unsigned long howmuch = sb->st_mtime - existingBak->st_mtime;
+					newer = 1;
+				}
+			#endif
+			if ( newer ) {
+				// MMCopyFile( fpath, bakfile );
+			}
+		} else {
+			MMCopyFile( fpath, bakfile );
 		}
 	}
-	return filename;
+	return bakfile;
 }
 
 // First-pass function to collect globals. Does not modify anything
@@ -1061,7 +1071,7 @@ int get_globals_in_file ( const char *fpath, const struct stat *sb, int tflag, s
 	if ( !good_file(fpath, ftwbuf) ) {
 		if ( verbose ) printf ( "EXCLUDE %s\n", fpath ); return 0;
 	}
-	bakfile = ensure_bakfile ( fpath, ftwbuf );
+	bakfile = ensure_bakfile ( fpath, sb, ftwbuf );
 	ext = MMFileExtension ( fpath );
 	infile = bakfile;
 	g_currfile = bakfile;
@@ -1093,7 +1103,7 @@ int process_file ( const char *fpath, const struct stat *sb, int tflag, struct F
 		if ( verbose ) printf ( "EXCLUDE %s\n", fpath );
 		g_count.skip++; return 0;
 	}
-	bakfile = ensure_bakfile ( fpath, ftwbuf );
+	bakfile = ensure_bakfile ( fpath, sb, ftwbuf );
 	ext = MMFileExtension ( fpath );
 	infile = bakfile;
 	g_currfile = bakfile;
